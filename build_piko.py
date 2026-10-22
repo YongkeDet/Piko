@@ -18,13 +18,13 @@ NEWX_CHINESE_STRINGS = Path("values-zh-rCN/newx/strings.xml")
 
 
 def apply_download_dialog_localization(piko_directory: Path) -> None:
-    """Connect download dialog display text to the translated resource bundle."""
+    """Apply versioned source fixes and connect download display text to resources."""
     root = Path(__file__).resolve().parent
-    source_patch = root / "source-patches/0001-localize-download-dialogs.patch"
-    subprocess.run(
-        ["git", "apply", "--check", str(source_patch)], cwd=piko_directory, check=True
-    )
-    subprocess.run(["git", "apply", str(source_patch)], cwd=piko_directory, check=True)
+    for source_patch in sorted((root / "source-patches").glob("*.patch")):
+        subprocess.run(
+            ["git", "apply", "--check", str(source_patch)], cwd=piko_directory, check=True
+        )
+        subprocess.run(["git", "apply", str(source_patch)], cwd=piko_directory, check=True)
     strings = piko_directory / "patches/src/main/resources/addresources/values/newx/strings.xml"
     additions = ET.parse(root / "localizations/values/newx/download-dialogs.xml").getroot()
     names = [entry.get("name") for entry in additions]
@@ -204,7 +204,11 @@ def build_piko_patches(
         set_project_version(piko_directory, patch_version)
 
         subprocess.run(
-            ["./gradlew", "clean", "buildAndroid"],
+            [
+                "./gradlew", "clean", ":extensions:newx:testReleaseUnitTest",
+                "--tests", "app.morphe.extension.newx.timeline.TimelineRefreshGateTest",
+                "buildAndroid",
+            ],
             cwd=piko_directory,
             env=os.environ.copy(),
             check=True,

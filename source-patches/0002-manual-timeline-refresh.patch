@@ -1,0 +1,199 @@
+--- a/extensions/newx/src/main/java/app/morphe/extension/newx/timeline/TimelineRefreshGate.java
++++ b/extensions/newx/src/main/java/app/morphe/extension/newx/timeline/TimelineRefreshGate.java
+@@ -44,6 +44,16 @@
+ 
+     public static boolean consumeForYouFilterRefresh() {
+         return consume(pendingForYouFilterRefreshDeadline);
++    }
++
++    /** Preserve initial loads and paging; replacing an existing list requires a pull gesture. */
++    public static boolean shouldAllowRequest(Enum<?> requestType, List<?> pages) {
++        if (isTimelineDataEmpty(pages)) return true;
++        if (requestType == null) return false;
++        return switch (requestType.name()) {
++            case "PULL_TO_REFRESH", "OLDER_THAN", "GAP" -> true;
++            default -> false;
++        };
+     }
+ 
+     public static boolean isTimelineDataEmpty(List<?> pages) {
+--- a/patches/src/main/kotlin/app/crimera/patches/newx/timeline/DisableTimelineRefreshPatch.kt
++++ b/patches/src/main/kotlin/app/crimera/patches/newx/timeline/DisableTimelineRefreshPatch.kt
+@@ -50,20 +50,15 @@
+ private const val GET_INTENT_DESCRIPTOR = "Landroid/app/Activity;->getIntent()$INTENT_DESCRIPTOR"
+ private const val MARK_POST_DEEP_LINK_DESCRIPTOR =
+     "$TIMELINE_REFRESH_GATE_DESCRIPTOR->markPostDeepLink($INTENT_DESCRIPTOR)V"
+-private const val CONSUME_POST_DEEP_LINK_DESCRIPTOR =
+-    "$TIMELINE_REFRESH_GATE_DESCRIPTOR->consumePostDeepLink()Z"
+-private const val CONSUME_FOR_YOU_FILTER_REFRESH_DESCRIPTOR =
+-    "$TIMELINE_REFRESH_GATE_DESCRIPTOR->consumeForYouFilterRefresh()Z"
+-private const val IS_POST_DEEP_LINK_PENDING_DESCRIPTOR =
+-    "$TIMELINE_REFRESH_GATE_DESCRIPTOR->isPostDeepLinkPending()Z"
+-private const val IS_FOR_YOU_FILTER_REFRESH_PENDING_DESCRIPTOR =
+-    "$TIMELINE_REFRESH_GATE_DESCRIPTOR->isForYouFilterRefreshPending()Z"
+ private const val IS_TIMELINE_DATA_EMPTY_DESCRIPTOR =
+     "$TIMELINE_REFRESH_GATE_DESCRIPTOR->isTimelineDataEmpty($LIST_DESCRIPTOR)Z"
+ private const val RESTORE_TIMELINE_POSITION_DESCRIPTOR =
+     "$TIMELINE_POSITION_STORE_DESCRIPTOR->restore($ENUM_DESCRIPTOR$STRING_DESCRIPTOR)[I"
+ private const val URT_SUPPRESS_LABEL = "piko_newx_refresh_urt_suppress"
+ private const val URT_CHECK_POSITION_LABEL = "piko_newx_refresh_urt_check_position"
++private const val URT_BLOCK_LABEL = "piko_newx_refresh_urt_block"
++private const val ALLOW_TIMELINE_REQUEST_DESCRIPTOR =
++    "$TIMELINE_REFRESH_GATE_DESCRIPTOR->shouldAllowRequest($ENUM_DESCRIPTOR$LIST_DESCRIPTOR)Z"
+ 
+ private object NewXMainActivityOnCreateFingerprint : Fingerprint(
+     definingClass = "Lcom/x/android/main/MainActivity;",
+@@ -154,7 +149,7 @@
+ val disableTimelineRefreshPatch =
+     bytecodePatch(
+         name = "NewX: Disable automatic timeline refresh",
+-        description = "Prevents automatic timeline jumps on startup and foregrounding.",
++        description = "Only pull-to-refresh may replace a loaded timeline; initial loads and pagination remain available.",
+     ) {
+         compatibleWith(COMPATIBILITY_NEW_X)
+ 
+@@ -319,6 +314,16 @@
+             val requestTypeDescriptor =
+                 requestCallReference.parameterTypes.firstOrNull()?.toString()?.takeIf { it.startsWith("L") }
+                     ?: throw PatchException("NewX URT repository request has no object request-type parameter")
++            if (mutableClassDefBy(requestTypeDescriptor).superclass != ENUM_DESCRIPTOR) {
++                throw PatchException("NewX timeline request type is not an enum: $requestTypeDescriptor")
++            }
++            val requestTypeFields = mutableClassDefBy(requestTypeDescriptor).fields
++                .filter { it.type.toString() == requestTypeDescriptor }
++                .map { it.name }.toSet()
++            val requiredRequestTypes = setOf("PULL_TO_REFRESH", "OLDER_THAN", "GAP")
++            if (!requestTypeFields.containsAll(requiredRequestTypes)) {
++                throw PatchException("NewX timeline request enum is missing manual-refresh or pagination types")
++            }
+             val repositoryClass = mutableClassDefBy(repoDescriptor)
+             val timelineGetterMatches =
+                 repositoryClass.methods.filter { method ->
+@@ -466,9 +471,8 @@
+                 val settingRegister = read.register
+                 val requestRegister = method.p0Register + 1
+                 val cursorRegister = method.p0Register + 2
+-                // A null cursor is also used by the first request on a fresh install. Suppress
+-                // populated-timeline refreshes, but keep an empty initial load alive. A saved
+-                // position changes that load to viewport-aware refresh so it cannot jump to top.
++                // Gate every request cursor on a loaded timeline. Only an explicit pull or
++                // pagination may update it; an empty timeline can still load and restore position.
+                 method.insertHook(
+                     index = read.nextIndex,
+                     // The setting read sits in front of the hook, so the pool must not hand its
+@@ -481,9 +485,6 @@
+                     // The timeline value stays live across the enum comparisons.
+                     val timelineRegister = scratchRegister()
+                     ifEqz(settingRegister, Target.Original)
+-                    ifNez(cursorRegister, Target.Original)
+-                    sget(settingRegister, fieldReference(repositoryAutoRefreshFieldReference))
+-                    ifNe(requestRegister, settingRegister, Target.Original)
+                     invokeVirtual(methodReference(repositoryTimelineGetterReference), method.p0Register)
+                     moveResult(timelineRegister, timelineEnumDescriptor)
+                     for (timelineName in suppressedTimelineNames) {
+@@ -495,21 +496,20 @@
+                     }
+                     goto(Target.Original)
+                     label(URT_SUPPRESS_LABEL)
+-                    invokeStatic(methodReference(CONSUME_POST_DEEP_LINK_DESCRIPTOR))
+-                    moveResult(settingRegister, "Z")
+-                    ifNez(settingRegister, Target.Original)
+-                    invokeStatic(methodReference(CONSUME_FOR_YOU_FILTER_REFRESH_DESCRIPTOR))
+-                    moveResult(settingRegister, "Z")
+-                    ifNez(settingRegister, Target.Original)
+                     invokeVirtual(methodReference(repositoryTimelineDataGetterReference), method.p0Register)
+                     moveResult(settingRegister, timelineDataFlowDescriptor)
+                     invokeInterface(methodReference(timelineDataFlowListGetterReference), settingRegister)
+                     moveResult(settingRegister, LIST_DESCRIPTOR)
+-                    invokeStatic(methodReference(IS_TIMELINE_DATA_EMPTY_DESCRIPTOR), settingRegister)
++                    invokeStatic(methodReference(ALLOW_TIMELINE_REQUEST_DESCRIPTOR), requestRegister, settingRegister)
+                     moveResult(settingRegister, "Z")
+-                    ifNez(settingRegister, Target.Local(URT_CHECK_POSITION_LABEL))
+-                    returnVoid()
++                    ifEqz(settingRegister, Target.Local(URT_BLOCK_LABEL))
++                    // Explicit pulls and paging must keep their native request type and position.
++                    sget(settingRegister, fieldReference(repositoryAutoRefreshFieldReference))
++                    ifEq(requestRegister, settingRegister, Target.Local(URT_CHECK_POSITION_LABEL))
++                    sget(settingRegister, fieldReference(repositoryViewportAwareAutoRefreshFieldReference))
++                    ifNe(requestRegister, settingRegister, Target.Original)
+                     label(URT_CHECK_POSITION_LABEL)
++                    ifNez(cursorRegister, Target.Original)
+                     invokeVirtual(methodReference(repositoryTimelineIdentityGetterReference), method.p0Register)
+                     moveResult(settingRegister, timelineIdentityDescriptor)
+                     iget(settingRegister, settingRegister, timelineIdentityField)
+@@ -522,6 +522,8 @@
+                     ifEqz(settingRegister, Target.Original)
+                     sget(requestRegister, fieldReference(repositoryViewportAwareAutoRefreshFieldReference))
+                     goto(Target.Original)
++                    label(URT_BLOCK_LABEL)
++                    returnVoid()
+                 }
+             }
+ 
+@@ -563,12 +565,6 @@
+                 relocateBranchTargets = true,
+             ) {
+                 ifEqz(settingRead.register, Target.Original)
+-                invokeStatic(methodReference(IS_POST_DEEP_LINK_PENDING_DESCRIPTOR))
+-                moveResult(settingRead.register, "Z")
+-                ifNez(settingRead.register, Target.Original)
+-                invokeStatic(methodReference(IS_FOR_YOU_FILTER_REFRESH_PENDING_DESCRIPTOR))
+-                moveResult(settingRead.register, "Z")
+-                ifNez(settingRead.register, Target.Original)
+                 invokeInterface(methodReference(eventTimelineDataGetterReference), repositoryReceiverRegister)
+                 moveResult(settingRead.register, timelineDataFlowDescriptor)
+                 invokeInterface(methodReference(timelineDataFlowListGetterReference), settingRead.register)
+--- a/patches/src/main/resources/addresources/values/newx/strings.xml
++++ b/patches/src/main/resources/addresources/values/newx/strings.xml
+@@ -21,7 +21,7 @@
+     <string name="piko_newx_backup_restore_summary">Save or restore your Piko NewX settings</string>
+ 
+     <string name="piko_newx_disable_timeline_refresh_title">Disable automatic timeline refresh</string>
+-    <string name="piko_newx_disable_timeline_refresh_summary">Prevents timeline jumps when NewX starts or returns to the foreground</string>
++    <string name="piko_newx_disable_timeline_refresh_summary">Only manual pull-to-refresh updates an existing timeline. Initial loading and scrolling to load more remain available.</string>
+     <string name="piko_newx_restore_timeline_position_title">Restore timeline position</string>
+     <string name="piko_newx_restore_timeline_position_summary">Returns to saved For You, Following, list, topic and community positions after the app restarts</string>
+     <string name="piko_newx_restore_profile_position_title">Restore profile scroll position</string>
+--- /dev/null
++++ b/extensions/newx/src/test/java/app/morphe/extension/newx/timeline/TimelineRefreshGateTest.java
+@@ -0,0 +1,40 @@
++package app.morphe.extension.newx.timeline;
++
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertTrue;
++
++import java.util.Arrays;
++import java.util.Collections;
++import java.util.List;
++import org.junit.Test;
++
++/** Catches automatic/cursor refreshes bypassing the toggle while preserving initial loads and paging. */
++public final class TimelineRefreshGateTest {
++    // Deliberately shuffled: request meaning is independent of its obfuscated enum ordinal.
++    private enum Request { GAP, VIEWPORT_AWARE_AUTO_REFRESH, PULL_TO_REFRESH, NEWER_THAN, OLDER_THAN, AUTO_REFRESH, FUTURE_REFRESH }
++
++    @Test
++    public void populatedTimelinesAllowOnlyPullsAndPagination() {
++        List<?> populated = Arrays.asList(Collections.emptyList(), Collections.singletonList("post"));
++        for (Request request : Request.values()) {
++            boolean allowed = TimelineRefreshGate.shouldAllowRequest(request, populated);
++            if (request == Request.PULL_TO_REFRESH || request == Request.OLDER_THAN || request == Request.GAP) {
++                assertTrue(request.name(), allowed);
++            } else {
++                assertFalse(request.name(), allowed);
++            }
++        }
++        assertFalse(TimelineRefreshGate.shouldAllowRequest(null, populated));
++    }
++
++    @Test
++    public void initialLoadsRemainAvailableIncludingEmptyPageContainers() {
++        List<?>[] emptyStates = new List<?>[] {null, Collections.emptyList(), Arrays.asList(null, Collections.emptyList())};
++        for (List<?> pages : emptyStates) {
++            for (Request request : Request.values()) {
++                assertTrue(request.name(), TimelineRefreshGate.shouldAllowRequest(request, pages));
++            }
++            assertTrue(TimelineRefreshGate.shouldAllowRequest(null, pages));
++        }
++    }
++}

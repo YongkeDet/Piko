@@ -20,7 +20,7 @@
     <string name="piko_newx_backup_restore_summary">保存或恢复 Piko NewX 设置</string>
 
     <string name="piko_newx_disable_timeline_refresh_title">禁用时间线自动刷新</string>
-    <string name="piko_newx_disable_timeline_refresh_summary">防止 NewX 启动或返回前台时时间线发生跳动</string>
+    <string name="piko_newx_disable_timeline_refresh_summary">已有列表仅允许手动下拉刷新；保留首次加载和向下浏览时的加载更多</string>
     <string name="piko_newx_restore_timeline_position_title">恢复时间线位置</string>
     <string name="piko_newx_restore_timeline_position_summary">应用重启后，恢复“为你推荐”“正在关注”、列表、话题和社群中保存的浏览位置</string>
     <string name="piko_newx_restore_profile_position_title">恢复个人资料页滚动位置</string>
