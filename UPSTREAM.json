@@ -1,0 +1,9 @@
+{
+  "builder_repository": "crimera/piko-newx",
+  "builder_commit": "8f9adff882309d0c63ecbeac6cde6a97849af18d",
+  "source_repository": "crimera/piko",
+  "source_commit": "11ea728b9e0a907b2162b79445368cbcef21e783",
+  "source_branch": "x-lite",
+  "upstream_version": "3.59.0",
+  "app_version": "12.35.0-prod.01"
+}
