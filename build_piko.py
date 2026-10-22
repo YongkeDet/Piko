@@ -17,6 +17,27 @@ XLITE_CONSTANTS = (
 NEWX_CHINESE_STRINGS = Path("values-zh-rCN/newx/strings.xml")
 
 
+def apply_download_dialog_localization(piko_directory: Path) -> None:
+    """Connect download dialog display text to the translated resource bundle."""
+    root = Path(__file__).resolve().parent
+    source_patch = root / "source-patches/0001-localize-download-dialogs.patch"
+    subprocess.run(
+        ["git", "apply", "--check", str(source_patch)], cwd=piko_directory, check=True
+    )
+    subprocess.run(["git", "apply", str(source_patch)], cwd=piko_directory, check=True)
+    strings = piko_directory / "patches/src/main/resources/addresources/values/newx/strings.xml"
+    additions = ET.parse(root / "localizations/values/newx/download-dialogs.xml").getroot()
+    names = [entry.get("name") for entry in additions]
+    existing_names = {entry.get("name") for entry in ET.parse(strings).getroot()}
+    if len(names) != len(set(names)) or existing_names.intersection(names):
+        raise ValueError("Download dialog resource IDs are duplicated")
+    content = strings.read_text(encoding="utf-8")
+    if content.count("</resources>") != 1:
+        raise ValueError("Unexpected upstream resource document")
+    extra = "".join("    " + ET.tostring(entry, encoding="unicode").strip() + "\n" for entry in additions)
+    strings.write_text(content.replace("</resources>", extra + "</resources>"), encoding="utf-8")
+
+
 def apply_chinese_localization(piko_directory: Path) -> None:
     """Include the local NewX settings translation in the patch bundle."""
     source = Path(__file__).resolve().parent / "localizations" / NEWX_CHINESE_STRINGS
@@ -178,6 +199,7 @@ def build_piko_patches(
         )
 
         pre_build_cleanup(piko_directory)
+        apply_download_dialog_localization(piko_directory)
         apply_chinese_localization(piko_directory)
         set_project_version(piko_directory, patch_version)
 

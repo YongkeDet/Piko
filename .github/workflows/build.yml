@@ -9,6 +9,7 @@ on:
       - 'build_piko.py'
       - 'build_cloud.py'
       - 'localizations/**'
+      - 'source-patches/**'
       - '.github/workflows/build.yml'
   workflow_dispatch:
 
@@ -78,4 +79,31 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "$VERSION" \
             --notes-file dist/release-notes.md \
-            "dist/$VERSION.mpp" dist/build-info.json dist/SHA256SUMS
+            "dist/$VERSION.mpp" dist/build-info.json dist/SHA256SUMS dist/patches-bundle.json
+      - name: Update remote patch subscription
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          PUBLISHED_SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION" --jq '.object.sha')
+          if [[ "$PUBLISHED_SHA" != "$GITHUB_SHA" ]]; then
+            echo "Existing release belongs to a different commit; preserving its subscription."
+            exit 0
+          fi
+          git fetch origin main
+          git switch main
+          git pull --ff-only origin main
+          CURRENT_VERSION=$(python3 -c 'import json; print(json.load(open("RELEASE.json"))["version"])')
+          if [[ "$CURRENT_VERSION" != "$VERSION" ]]; then
+            echo "A newer version is configured on main; leaving its subscription unchanged."
+            exit 0
+          fi
+          cp dist/patches-bundle.json patches-bundle.json
+          git add patches-bundle.json
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m "chore: update subscription to $VERSION [skip ci]"
+          git push origin HEAD:main

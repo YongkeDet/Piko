@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="piko_newx_download_picker_title">Download media</string>
+    <string name="piko_newx_download_picker_select_title">Select media</string>
+    <string name="piko_newx_download_picker_from_user">From @%1$s</string>
+    <string name="piko_newx_download_picker_hint">Select media to save to your device</string>
+    <string name="piko_newx_download_picker_selected_count">%1$d of %2$d selected</string>
+    <string name="piko_newx_download_picker_download_all">Download All (%1$d)</string>
+    <string name="piko_newx_download_picker_download_count">Download (%1$d)</string>
+    <string name="piko_newx_download_picker_merge">Download &amp; Merge</string>
+    <string name="piko_newx_download_picker_merge_count">Merge (%1$d)</string>
+    <string name="piko_newx_download_picker_link_copied">Link copied</string>
+    <string name="piko_newx_download_picker_image">Image</string>
+    <string name="piko_newx_download_picker_video">Video</string>
+    <string name="piko_newx_download_picker_choose_resolution">Choose resolution</string>
+    <string name="piko_newx_download_picker_choose_quality">Choose quality</string>
+</resources>

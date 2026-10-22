@@ -1,0 +1,169 @@
+--- a/extensions/newx/src/main/java/app/morphe/extension/newx/misc/MediaPickerDialog.java
++++ b/extensions/newx/src/main/java/app/morphe/extension/newx/misc/MediaPickerDialog.java
+@@ -14,6 +14,7 @@
+ 
+ import app.morphe.extension.newx.settings.NewXLogger;
+ import app.morphe.extension.shared.Utils;
++import app.morphe.extension.shared.StringRef;
+ import app.morphe.extension.crimera.settings.SettingsRegistry;
+ import app.morphe.extension.newx.ui.BottomSheetView;
+ import app.morphe.extension.crimera.ui.ButtonView;
+@@ -76,11 +77,11 @@
+         }
+ 
+         BottomSheetView dialog = new BottomSheetView(current);
+-        dialog.setTitle("Download media");
++        dialog.setTitle(StringRef.str("piko_newx_download_picker_title"));
+ 
+         String defaultSubtitle = (username != null && !username.trim().isEmpty())
+-                ? "From @" + username.trim()
+-                : "Select media to save to your device";
++                ? StringRef.str("piko_newx_download_picker_from_user", username.trim())
++                : StringRef.str("piko_newx_download_picker_hint");
+         dialog.setSubtitle(defaultSubtitle);
+ 
+         LinearLayout listContainer = new LinearLayout(current);
+@@ -119,7 +120,7 @@
+             mergeButton = new ButtonView(
+                     current,
+                     ButtonView.ButtonStyle.TONAL,
+-                    "Download & Merge"
++                    StringRef.str("piko_newx_download_picker_merge")
+             );
+             dialog.addButton(mergeButton);
+         } else {
+@@ -130,7 +131,8 @@
+         final ButtonView downloadButton = new ButtonView(
+                 current,
+                 ButtonView.ButtonStyle.FILLED,
+-                hasMultiple ? "Download All (" + downloads.size() + ")" : "Download (1)"
++                StringRef.str(hasMultiple ? "piko_newx_download_picker_download_all"
++                        : "piko_newx_download_picker_download_count", downloads.size())
+         );
+         if (!hasMultiple) {
+             downloadButton.setVisibility(View.GONE);
+@@ -160,19 +162,19 @@
+             }
+ 
+             if (isSelectionMode[0]) {
+-                dialog.setTitle("Select media");
+-                dialog.setSubtitle(selectedCount + " of " + downloads.size() + " selected");
++                dialog.setTitle(StringRef.str("piko_newx_download_picker_select_title"));
++                dialog.setSubtitle(StringRef.str("piko_newx_download_picker_selected_count", selectedCount, downloads.size()));
+                 downloadButton.setEnabled(true);
+                 if (selectedCount == downloads.size()) {
+-                    downloadButton.setText("Download All (" + downloads.size() + ")");
+-                } else {
+-                    downloadButton.setText("Download (" + selectedCount + ")");
++                    downloadButton.setText(StringRef.str("piko_newx_download_picker_download_all", downloads.size()));
++                } else {
++                    downloadButton.setText(StringRef.str("piko_newx_download_picker_download_count", selectedCount));
+                 }
+                 downloadButton.setVisibility(View.VISIBLE);
+ 
+                 if (mergeButton != null) {
+                     if (selectedImageCount >= 2) {
+-                        mergeButton.setText("Merge (" + selectedImageCount + ")");
++                        mergeButton.setText(StringRef.str("piko_newx_download_picker_merge_count", selectedImageCount));
+                         mergeButton.setVisibility(View.VISIBLE);
+                         mergeButton.setEnabled(true);
+                     } else {
+@@ -180,18 +182,18 @@
+                     }
+                 }
+             } else {
+-                dialog.setTitle("Download media");
++                dialog.setTitle(StringRef.str("piko_newx_download_picker_title"));
+                 dialog.setSubtitle(defaultSubtitle);
+                 downloadButton.setEnabled(true);
+                 if (hasMultiple) {
+-                    downloadButton.setText("Download All (" + downloads.size() + ")");
++                    downloadButton.setText(StringRef.str("piko_newx_download_picker_download_all", downloads.size()));
+                     downloadButton.setVisibility(View.VISIBLE);
+                 } else {
+                     downloadButton.setVisibility(View.GONE);
+                 }
+ 
+                 if (mergeButton != null) {
+-                    mergeButton.setText("Download & Merge");
++                    mergeButton.setText(StringRef.str("piko_newx_download_picker_merge"));
+                     mergeButton.setVisibility(View.VISIBLE);
+                     mergeButton.setEnabled(true);
+                 }
+@@ -264,7 +266,7 @@
+             InlineDownloadButton.DownloadItem item = downloads.get(i);
+ 
+             ListItem itemRow = new ListItem(current, themeSettings);
+-            itemRow.setTitle(item.label + (hasMultiple ? " " + (i + 1) : ""));
++            itemRow.setTitle(displayLabel(item.label) + (hasMultiple ? " " + (i + 1) : ""));
+             itemRow.setSubtitle(item.resolution);
+ 
+             IconView.IconType iconType = resolveIconType(item);
+@@ -457,10 +459,24 @@
+                     v -> {
+                         dialog.dismiss();
+                         Utils.setClipboard(item.url);
+-                        Utils.showToastShort("Link copied");
+-                    }
+-            );
+-        }
++                        Utils.showToastShort(StringRef.str("piko_newx_download_picker_link_copied"));
++                    }
++            );
++        }
++    }
++
++    /** Localize display text only; DownloadItem labels remain stable for media detection. */
++    static String displayLabel(String label) {
++        if (label == null) return null;
++        return switch (label) {
++            case "Image" -> StringRef.str("piko_newx_download_picker_image");
++            case "Video" -> StringRef.str("piko_newx_download_picker_video");
++            case "Original" -> StringRef.str("piko_newx_inline_download_quality_original");
++            case "Large" -> StringRef.str("piko_newx_inline_download_quality_large");
++            case "Medium" -> StringRef.str("piko_newx_inline_download_quality_medium");
++            case "Small" -> StringRef.str("piko_newx_inline_download_quality_small");
++            default -> label;
++        };
+     }
+ 
+     static boolean isImage(InlineDownloadButton.DownloadItem item) {
+--- a/extensions/newx/src/main/java/app/morphe/extension/newx/misc/ResolutionChooserDialog.java
++++ b/extensions/newx/src/main/java/app/morphe/extension/newx/misc/ResolutionChooserDialog.java
+@@ -5,6 +5,7 @@
+ import android.widget.LinearLayout;
+ 
+ import app.morphe.extension.newx.settings.NewXLogger;
++import app.morphe.extension.shared.StringRef;
+ import app.morphe.extension.newx.ui.BottomSheetView;
+ import app.morphe.extension.newx.ui.IconView;
+ import app.morphe.extension.newx.ui.ListItem;
+@@ -49,7 +50,9 @@
+         }
+ 
+         BottomSheetView dialog = new BottomSheetView(current);
+-        dialog.setTitle(isImage(item) ? "Choose resolution" : "Choose quality");
++        dialog.setTitle(StringRef.str(isImage(item)
++                ? "piko_newx_download_picker_choose_resolution"
++                : "piko_newx_download_picker_choose_quality"));
+         dialog.setSubtitle(subtitleFor(item, username));
+ 
+         Theme.SettingsSnapshot themeSettings = Theme.snapshot();
+@@ -58,7 +61,7 @@
+ 
+         for (InlineDownloadButton.DownloadItem option : item.resolutionOptions) {
+             ListItem row = new ListItem(current, themeSettings);
+-            row.setTitle(option.label);
++            row.setTitle(MediaPickerDialog.displayLabel(option.label));
+             row.setSubtitle(option.detail != null ? option.detail : option.resolution);
+             row.setLeadingIcon(
+                     resolveIconType(item),
+@@ -84,7 +87,7 @@
+     ) {
+         StringBuilder builder = new StringBuilder();
+         if (username != null && !username.trim().isEmpty()) {
+-            builder.append("From @").append(username.trim());
++            builder.append(StringRef.str("piko_newx_download_picker_from_user", username.trim()));
+         }
+         if (item.resolution != null) {
+             if (builder.length() > 0) builder.append(" · ");

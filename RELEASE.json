@@ -1,6 +1,10 @@
 {
-  "version": "X.26.01",
-  "translation_revision": 1,
+  "version": "X.26.02",
+  "translation_revision": 2,
   "locale": "zh-CN",
-  "translated_strings": 473
+  "translated_strings": 487,
+  "changes": [
+    "补齐每次询问画质时的分辨率和画质选择窗口，以及多媒体选择、下载、合并和复制链接提示的中文翻译。",
+    "提供固定的 Morphe 远程补丁订阅地址，后续版本无需重新导入本地补丁。"
+  ]
 }
