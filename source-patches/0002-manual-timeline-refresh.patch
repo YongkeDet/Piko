@@ -197,3 +197,26 @@
 +        }
 +    }
 +}
+--- a/extensions/newx/src/main/java/app/morphe/extension/newx/timeline/ForYouTopicFilterSheet.java
++++ b/extensions/newx/src/main/java/app/morphe/extension/newx/timeline/ForYouTopicFilterSheet.java
+@@ -12,6 +12,7 @@
+ import java.util.Set;
+ 
+ import app.morphe.extension.crimera.settings.SettingsUi;
++import app.morphe.extension.crimera.settings.SettingsRegistry;
+ import app.morphe.extension.newx.settings.NewXLogger;
+ import app.morphe.extension.newx.ui.BottomSheetView;
+ import app.morphe.extension.crimera.ui.ButtonView;
+@@ -99,7 +100,11 @@
+                         }
+                     }
+                     saveSelection(selected);
+-                    refreshTarget.pikoRefreshForYouTopicFilter();
++                    // A strict refresh preference keeps the existing list until a pull gesture.
++                    // False also preserves native behavior when the refresh patch is not installed.
++                    if (!SettingsRegistry.getBooleanOrDefault("newx.timeline.disable_refresh", false)) {
++                        refreshTarget.pikoRefreshForYouTopicFilter();
++                    }
+                 } catch (Throwable exception) {
+                     NewXLogger.printException(
+                             () -> "Failed to apply For You topic selection",
