@@ -74,9 +74,9 @@ def main() -> None:
         ),
         encoding="utf-8",
     )
-    rollback = release.get("replace_existing_release", {}).get("backup_tag")
+    rollback = release.get("replace_existing_release", {}).get("backup_branch")
     rollback_note = (
-        f"本次更新现有 {version}（修订 {release.get('release_revision', 1)}），未新增 Release。更新前的 Git 标签为 `{rollback}`；旧补丁包 `{rollback}.mpp` 和旧构建信息保留在本发布的附件中。\n\n"
+        f"本次更新现有 {version}（修订 {release.get('release_revision', 1)}），未新增 Release。更新前的 Git 分支为 `{rollback}`；旧补丁包 `{release['replace_existing_release']['backup_asset_prefix']}.mpp` 和旧构建信息保留在本发布的附件中。\n\n"
         if rollback else ""
     )
     (dist / "release-notes.md").write_text(

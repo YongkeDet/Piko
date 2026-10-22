@@ -38,17 +38,16 @@ def main() -> None:
         previous = replacement["previous_commit"]
         if tag["type"] != "commit" or tag["sha"] not in (previous, commit):
             raise RuntimeError("Release tag changed unexpectedly; refusing to replace it")
-        backup_tag = replacement["backup_tag"]
-        refs = api(f"{prefix}/git/matching-refs/tags/{backup_tag}")
-        exact = [ref for ref in refs if ref["ref"] == f"refs/tags/{backup_tag}"]
-        if exact:
-            if exact[0]["object"]["sha"] != previous:
-                raise RuntimeError("Rollback tag points to a different commit")
-        else:
-            api(f"{prefix}/git/refs", "-X", "POST", "-f", f"ref=refs/tags/{backup_tag}", "-f", f"sha={previous}")
+        backup_name = replacement["backup_asset_prefix"]
+        backup_branch = replacement["backup_branch"]
+        # This rollback branch is created through the repository connection. Actions cannot
+        # create a ref to older source when that source has a different workflow definition.
+        backup = api(f"{prefix}/git/ref/heads/{backup_branch}")["object"]
+        if backup["type"] != "commit" or backup["sha"] != previous:
+            raise RuntimeError("Rollback branch points to a different commit")
 
         backup_names = {
-            f"{version}.mpp": f"{backup_tag}.mpp",
+            f"{version}.mpp": f"{backup_name}.mpp",
             "build-info.json": "build-info-before-user-folders.json",
             "SHA256SUMS": "SHA256SUMS-before-user-folders",
             "patches-bundle.json": "patches-bundle-before-user-folders.json",
@@ -84,7 +83,7 @@ def main() -> None:
         gh("release", "upload", version, "--repo", repository, "--clobber", *assets)
         gh("release", "edit", version, "--repo", repository, "--title", version, "--notes-file", "dist/release-notes.md")
         api(f"{prefix}/git/refs/tags/{version}", "-X", "PATCH", "-f", f"sha={commit}", "-F", "force=true")
-        print(f"Updated existing release {version}; rollback: {backup_tag}", flush=True)
+        print(f"Updated existing release {version}; rollback: {backup_branch}", flush=True)
         return
 
     existing = subprocess.run(["gh", "release", "view", version, "--repo", repository], capture_output=True)

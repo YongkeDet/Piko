@@ -32,11 +32,11 @@ https://raw.githubusercontent.com/YongkeDet/Piko/main/patches-bundle.json
 
 云端工作流会编译固定版本的源码，检查资源名称和格式占位符，生成补丁包、构建信息和 SHA-256 校验值。当前适用 X `12.34.0-prod.01` 和 `12.35.0-prod.01`。此仓库不包含第三方 X 安装包。
 
-在 [Actions](https://github.com/YongkeDet/Piko/actions/workflows/build.yml) 中可以手动重新构建。更新构建配置或翻译也会触发构建。默认保留已发布版本；只有 `RELEASE.json` 显式指定发布 ID、旧提交和备份标签时，才能备份后更新该现有发布。
+在 [Actions](https://github.com/YongkeDet/Piko/actions/workflows/build.yml) 中可以手动重新构建。更新构建配置或翻译也会触发构建。默认保留已发布版本；只有 `RELEASE.json` 显式指定发布 ID、旧提交和备份分支时，才能备份后更新该现有发布。
 
 ## 版本与回退
 
-- 本次更新沿用 `X.26.04`，未新增 Release；更新前代码保存在 `X.26.04-before-user-folders` 标签，旧补丁包 `X.26.04-before-user-folders.mpp` 保留在同一发布中。
+- 本次更新沿用 `X.26.04`，未新增 Release；更新前代码保存在 `backup/X.26.04-before-user-folders` 分支，旧补丁包 `X.26.04-before-user-folders.mpp` 保留在同一发布中。
 - 第一版标签和发布名称：`X.26.01`；本次行为调整为 `X.26.04`，此前版本的标签和产物全部保留。版本信息保存在 `RELEASE.json`。
 - 汉化前基线：`upstream-baseline` 分支；最初的仓库提交也保留在 Git 历史中。
 - 查看第一版：`git switch --detach X.26.01`。

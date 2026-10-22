@@ -14,6 +14,7 @@
   "replace_existing_release": {
     "id": 420608002,
     "previous_commit": "5de522c800101e8733772c554e354e611906c2f6",
-    "backup_tag": "X.26.04-before-user-folders"
+    "backup_asset_prefix": "X.26.04-before-user-folders",
+    "backup_branch": "backup/X.26.04-before-user-folders"
   }
 }
