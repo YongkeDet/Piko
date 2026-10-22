@@ -1,7 +1,7 @@
 {
-  "version": "X.26.01",
-  "created_at": "2026-10-22T09:01:59",
-  "description": "Piko NewX 设置简体中文第一版，共 473 条界面文本。",
-  "download_url": "https://github.com/YongkeDet/Piko/releases/download/X.26.01/X.26.01.mpp",
+  "version": "X.26.02",
+  "created_at": "2026-10-22T10:19:50",
+  "description": "Piko NewX 简体中文补丁 X.26.02\n\n- 补齐每次询问画质时的分辨率和画质选择窗口，以及多媒体选择、下载、合并和复制链接提示的中文翻译。\n- 提供固定的 Morphe 远程补丁订阅地址，后续版本无需重新导入本地补丁。",
+  "download_url": "https://github.com/YongkeDet/Piko/releases/download/X.26.02/X.26.02.mpp",
   "signature_download_url": ""
 }
