@@ -74,10 +74,16 @@ def main() -> None:
         ),
         encoding="utf-8",
     )
+    rollback = release.get("replace_existing_release", {}).get("backup_tag")
+    rollback_note = (
+        f"本次更新现有 {version}（修订 {release.get('release_revision', 1)}），未新增 Release。更新前的 Git 标签为 `{rollback}`；旧补丁包 `{rollback}.mpp` 和旧构建信息保留在本发布的附件中。\n\n"
+        if rollback else ""
+    )
     (dist / "release-notes.md").write_text(
         f"# {version}\n\n"
         f"Piko NewX 简体中文第 {release['translation_revision']} 版，共 {release['translated_strings']} 条界面文本。\n\n"
         f"{changes}\n\n"
+        f"{rollback_note}"
         f"适用 X 版本：{', '.join(sorted(build.supported_versions))}。\n\n"
         f"上游源码：`{build.commit}`\n\n"
         f"本仓库提交：`{source_commit}`\n\n"

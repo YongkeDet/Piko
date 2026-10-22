@@ -11,6 +11,7 @@ on:
       - 'localizations/**'
       - 'source-patches/**'
       - '.github/workflows/build.yml'
+      - '.github/scripts/publish_release.py'
   workflow_dispatch:
 
 permissions:
@@ -61,25 +62,10 @@ jobs:
           path: dist/
           if-no-files-found: error
           retention-days: 90
-      - name: Create version tag and release
+      - name: Publish or update the configured release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.release.outputs.version }}
-        run: |
-          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $VERSION already exists; its tag and files will be preserved."
-            exit 0
-          fi
-          if git ls-remote --exit-code --tags origin "refs/tags/$VERSION" >/dev/null 2>&1; then
-            echo "Tag $VERSION already exists; refusing to replace it."
-            exit 1
-          fi
-          gh release create "$VERSION" \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "$VERSION" \
-            --notes-file dist/release-notes.md \
-            "dist/$VERSION.mpp" dist/build-info.json dist/SHA256SUMS dist/patches-bundle.json
+        run: python .github/scripts/publish_release.py
       - name: Update remote patch subscription
         env:
           GH_TOKEN: ${{ github.token }}

@@ -2,10 +2,18 @@
   "version": "X.26.04",
   "translation_revision": 4,
   "locale": "zh-CN",
-  "translated_strings": 487,
+  "translated_strings": 489,
   "changes": [
+    "新增“帖子操作与媒体 → 内嵌下载 → 按作者分文件夹保存”开关，默认关闭。开启后，图片、视频、GIF 及拼接图片按媒体原作者保存至所选目录下的 @用户名 子文件夹；兼容接管原生下载。",
     "开启禁用时间线自动刷新后，已有列表仅允许手动下拉刷新；首次加载和向下浏览时的加载更多照常。",
     "拦截前台切换、视口感知自动刷新和获取更新内容的请求；修改推荐话题后仅保存条件，等手动下拉时应用，避免先清空列表再刷新。",
-    "沿用固定订阅地址，保留 X.26.02 及更早版本供回退。"
-  ]
+    "沿用固定订阅地址，保留 X.26.02 及更早版本供回退。",
+    "本次直接更新现有 X.26.04 发布，更新前的代码和补丁包另存为 X.26.04-before-user-folders，未创建新 Release。"
+  ],
+  "release_revision": 2,
+  "replace_existing_release": {
+    "id": 420608002,
+    "previous_commit": "5de522c800101e8733772c554e354e611906c2f6",
+    "backup_tag": "X.26.04-before-user-folders"
+  }
 }

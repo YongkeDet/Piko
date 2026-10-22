@@ -1,0 +1,169 @@
+--- a/extensions/newx/src/main/java/app/morphe/extension/newx/misc/DownloadSettings.java
++++ b/extensions/newx/src/main/java/app/morphe/extension/newx/misc/DownloadSettings.java
+@@ -17,6 +17,7 @@
+     static final String VIDEOS_DISPLAY_PATH = "newx.content.inline_download.videos_display_path";
+     static final String FILENAME_TEMPLATE = "newx.content.inline_download.filename_template";
+     static final String CONFLICT_POLICY = "newx.content.inline_download_conflict";
++    static final String AUTHOR_SUBFOLDERS = "newx.content.inline_download.author_subfolders";
+     static final String REDIRECT_NATIVE_DOWNLOADS = "newx.content.inline_download.redirect_native";
+ 
+     static final String CONFLICT_OVERWRITE = "overwrite";
+@@ -65,6 +66,11 @@
+         return SettingsRegistry.getStringOrDefault(CONFLICT_POLICY, CONFLICT_SKIP);
+     }
+ 
++    static boolean authorSubfolders() {
++        ensureLoaded();
++        return SettingsRegistry.getBooleanOrDefault(AUTHOR_SUBFOLDERS, false);
++    }
++
+     static boolean redirectNativeDownloads() {
+         ensureLoaded();
+         return SettingsRegistry.getBooleanOrDefault(REDIRECT_NATIVE_DOWNLOADS, true);
+--- a/extensions/newx/src/main/java/app/morphe/extension/newx/misc/NewXDownloadFolders.java
++++ b/extensions/newx/src/main/java/app/morphe/extension/newx/misc/NewXDownloadFolders.java
+@@ -6,6 +6,10 @@
+ import android.provider.DocumentsContract;
+ 
+ import androidx.annotation.Nullable;
++
++import java.util.Collections;
++import java.util.List;
++import java.util.Locale;
+ 
+ import app.morphe.extension.crimera.downloader.FolderPicker;
+ import app.morphe.extension.crimera.downloader.engine.DestinationCheck;
+@@ -16,6 +20,9 @@
+ import app.morphe.extension.shared.Utils;
+ 
+ public final class NewXDownloadFolders {
++
++    // All download entry points share document reservation, including first-time subfolder creation.
++    static final Object RESERVATION_LOCK = new Object();
+ 
+     private NewXDownloadFolders() {
+     }
+@@ -34,6 +41,21 @@
+         LIVE,
+         /** Stored folder is revoked, deleted, or from another device. */
+         UNUSABLE,
++    }
++
++    /** Relative to the selected media root; source context also handles reposted/quoted media. */
++    static List<String> subpath(DownloadFileName.PostContext post) {
++        if (!DownloadSettings.authorSubfolders()) return Collections.emptyList();
++        String handle = post == null ? null : post.screenName;
++        if (handle != null) {
++            handle = handle.trim();
++            if (handle.startsWith("@")) handle = handle.substring(1);
++            // Account handles are case-insensitive. Never accept path separators or dot segments.
++            if (handle.matches("[A-Za-z0-9_]+")) {
++                return Collections.singletonList("@" + handle.toLowerCase(Locale.ROOT));
++            }
++        }
++        return Collections.singletonList("unknown_user");
+     }
+ 
+     /** Routes a MIME type to its destination. Unknown media types fail closed. */
+--- a/extensions/newx/src/main/java/app/morphe/extension/newx/misc/InlineDownloadButton.java
++++ b/extensions/newx/src/main/java/app/morphe/extension/newx/misc/InlineDownloadButton.java
+@@ -1230,7 +1230,7 @@
+                     download.url,
+                     fallbacks,
+                     destinationTree,
+-                    Collections.emptyList(),
++                    NewXDownloadFolders.subpath(postContext),
+                     resolvedFileName,
+                     download.mimeType,
+                     policy,
+@@ -1241,7 +1241,10 @@
+             return EnqueueState.FAILED;
+         }
+ 
+-        EnqueueResult result = engine.enqueue(request);
++        final EnqueueResult result;
++        synchronized (NewXDownloadFolders.RESERVATION_LOCK) {
++            result = engine.enqueue(request);
++        }
+         if (result.state() == EnqueueState.DESTINATION_LOST) {
+             NewXDownloadFolders.invalidate(kind);
+         }
+--- a/extensions/newx/src/main/java/app/morphe/extension/newx/misc/NativeDownloadRouter.java
++++ b/extensions/newx/src/main/java/app/morphe/extension/newx/misc/NativeDownloadRouter.java
+@@ -107,7 +107,7 @@
+         Context applicationContext = context.getApplicationContext();
+         Context safeContext = applicationContext != null ? applicationContext : context;
+         ENQUEUE_EXECUTOR.execute(() ->
+-                enqueue(safeContext, kind, fileName, url, mimeType, username));
++                enqueue(safeContext, kind, fileName, url, mimeType, username, postContext));
+         return true;
+     }
+ 
+@@ -117,7 +117,8 @@
+             String fileName,
+             String url,
+             String mimeType,
+-            String username
++            String username,
++            DownloadFileName.PostContext postContext
+     ) {
+         DownloadEngine engine = NewXDownloader.get();
+         if (engine == null) {
+@@ -144,7 +145,7 @@
+                     url,
+                     fallbacks,
+                     destinationTree,
+-                    Collections.emptyList(),
++                    NewXDownloadFolders.subpath(postContext),
+                     fileName,
+                     mimeType,
+                     policy,
+@@ -156,7 +157,10 @@
+             return;
+         }
+ 
+-        EnqueueResult result = engine.enqueue(request);
++        final EnqueueResult result;
++        synchronized (NewXDownloadFolders.RESERVATION_LOCK) {
++            result = engine.enqueue(request);
++        }
+         switch (result.state()) {
+             case QUEUED -> postStatus("Download started", username);
+             case SKIPPED -> postStatus("Already downloaded", username);
+--- a/extensions/newx/src/main/java/app/morphe/extension/newx/misc/MediaMerger.java
++++ b/extensions/newx/src/main/java/app/morphe/extension/newx/misc/MediaMerger.java
+@@ -212,7 +212,7 @@
+                         items.get(0).url,
+                         Collections.emptyList(),
+                         destinationTree,
+-                        Collections.emptyList(),
++                        NewXDownloadFolders.subpath(postContext),
+                         fileName,
+                         mimeType,
+                         NewXDownloadFolders.conflictPolicy(),
+@@ -228,7 +228,9 @@
+             SafDestination destination = new SafDestination(LOG);
+             final Reservation reservation;
+             try {
+-                reservation = destination.reserve(context, request);
++                synchronized (NewXDownloadFolders.RESERVATION_LOCK) {
++                    reservation = destination.reserve(context, request);
++                }
+             } catch (Exception exception) {
+                 mergedBitmap.recycle();
+                 NewXLogger.printException(() -> LOG_PREFIX + "Failed to create merged image document", exception);
+--- a/patches/src/main/kotlin/app/crimera/patches/newx/misc/inlineactions/InlineDownloadButtonPatch.kt
++++ b/patches/src/main/kotlin/app/crimera/patches/newx/misc/inlineactions/InlineDownloadButtonPatch.kt
+@@ -199,6 +199,12 @@
+                                 choice("skip", "piko_newx_inline_download_conflict_skip"),
+                             ),
+                     )
++                    toggle(
++                        id = "newx.content.inline_download.author_subfolders",
++                        strings = settingStrings("piko_newx_inline_download_author_subfolders"),
++                        order = 405,
++                        defaultValue = false,
++                    )
+                     // Folders and the filename template need richer editors than a settings row, so
+                     // they live in the Download options screen.
+                     customScreen(

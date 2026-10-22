@@ -509,4 +509,6 @@
     <string name="piko_newx_download_picker_video">视频</string>
     <string name="piko_newx_download_picker_choose_resolution">选择分辨率</string>
     <string name="piko_newx_download_picker_choose_quality">选择画质</string>
+    <string name="piko_newx_inline_download_author_subfolders_title">按作者分文件夹保存</string>
+    <string name="piko_newx_inline_download_author_subfolders_summary">在已选下载目录中，按作者账号创建 @用户名 文件夹，保存图片、视频和 GIF；无法识别作者时保存到 unknown_user。</string>
 </resources>

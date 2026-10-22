@@ -14,4 +14,6 @@
     <string name="piko_newx_download_picker_video">Video</string>
     <string name="piko_newx_download_picker_choose_resolution">Choose resolution</string>
     <string name="piko_newx_download_picker_choose_quality">Choose quality</string>
+    <string name="piko_newx_inline_download_author_subfolders_title">Save in author folders</string>
+    <string name="piko_newx_inline_download_author_subfolders_summary">Save images, videos and GIFs in an @username subfolder of the selected download folder. Unidentified authors use unknown_user.</string>
 </resources>
