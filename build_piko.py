@@ -5,6 +5,8 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from collections import Counter
+import xml.etree.ElementTree as ET
 
 PIKO_REPO = "crimera/piko"
 PIKO_REPOSITORY = f"https://github.com/{PIKO_REPO}.git"
@@ -12,6 +14,52 @@ PIKO_BRANCH = "x-lite"
 XLITE_CONSTANTS = (
     "patches/src/main/kotlin/app/crimera/patches/newx/utils/Constants.kt"
 )
+NEWX_CHINESE_STRINGS = Path("values-zh-rCN/newx/strings.xml")
+
+
+def apply_chinese_localization(piko_directory: Path) -> None:
+    """Include the local NewX settings translation in the patch bundle."""
+    source = Path(__file__).resolve().parent / "localizations" / NEWX_CHINESE_STRINGS
+    validate_chinese_localization(piko_directory, source)
+    target = (
+        piko_directory
+        / "patches/src/main/resources/addresources"
+        / NEWX_CHINESE_STRINGS
+    )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target)
+
+
+def validate_chinese_localization(piko_directory: Path, translation: Path) -> int:
+    """Fail before building if resource IDs or formatting no longer match upstream."""
+    original = ET.parse(
+        piko_directory / "patches/src/main/resources/addresources/values/newx/strings.xml"
+    ).getroot()
+    translated = ET.parse(translation).getroot()
+    expected = {
+        entry.get("name"): entry
+        for entry in original
+        if entry.get("translatable") != "false"
+    }
+    actual = {entry.get("name"): entry for entry in translated}
+    if len(actual) != len(translated) or expected.keys() != actual.keys():
+        raise ValueError("Chinese resource IDs are duplicated or do not match upstream")
+    placeholders = re.compile(r"%(?:\d+\$)?[-#+ 0,(<]*\d*(?:\.\d+)?(?:[tT][a-zA-Z]|[a-zA-Z%])")
+    for name, entry in expected.items():
+        text = actual[name].text or ""
+        original_text = entry.text or ""
+        if not text.strip():
+            raise ValueError(f"Empty translation: {name}")
+        if Counter(placeholders.findall(text)) != Counter(placeholders.findall(original_text)):
+            raise ValueError(f"Format placeholders differ: {name}")
+        if re.findall(r"\{[^}]+\}", text) != re.findall(r"\{[^}]+\}", original_text):
+            raise ValueError(f"Filename tokens differ: {name}")
+        if text.count(r"\n") != original_text.count(r"\n"):
+            raise ValueError(f"Escaped newlines differ: {name}")
+        if text.startswith(("@", "?")) or re.search(r"(?<!\\)[\"']", text):
+            raise ValueError(f"Unescaped Android string syntax: {name}")
+    print(f"Validated {len(actual)} Chinese settings strings", flush=True)
+    return len(actual)
 
 
 @dataclass(frozen=True)
@@ -84,7 +132,7 @@ def set_project_version(piko_directory: Path, version: str) -> None:
 
 
 def build_piko_patches(
-    patch_version: str, output: str | None = None
+    patch_version: str, output: str | None = None, source_commit: str | None = None
 ) -> PikoBuild:
     if output is None:
         output = f"bins/patches-{patch_version}.mpp"
@@ -93,6 +141,8 @@ def build_piko_patches(
 
     if patch_version.startswith("v"):
         raise ValueError("patch_version must not include the leading v")
+    if source_commit is not None and re.fullmatch(r"[0-9a-f]{40}", source_commit) is None:
+        raise ValueError("source_commit must be a full Git commit SHA")
 
     with tempfile.TemporaryDirectory(prefix="piko-") as temporary_directory:
         piko_directory = Path(temporary_directory) / "piko"
@@ -111,11 +161,24 @@ def build_piko_patches(
             check=True,
         )
 
+        if source_commit is not None:
+            subprocess.run(
+                ["git", "fetch", "--depth", "1", "origin", source_commit],
+                cwd=piko_directory,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "checkout", "--detach", source_commit],
+                cwd=piko_directory,
+                check=True,
+            )
+
         supported_versions = get_supported_versions(
             (piko_directory / XLITE_CONSTANTS).read_text()
         )
 
         pre_build_cleanup(piko_directory)
+        apply_chinese_localization(piko_directory)
         set_project_version(piko_directory, patch_version)
 
         subprocess.run(
