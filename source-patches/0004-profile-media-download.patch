@@ -1,5 +1,14 @@
 --- a/patch-twitter.sh
 +++ b/patch-twitter.sh
+@@ -10,7 +10,7 @@
+ PATCHER_MAX_HEAP_MB="${PATCHER_MAX_HEAP_MB:-1024}"
+ # Overridable so the bundle can also be exercised against a pre-release/manager patcher build,
+ # which is the ABI the shipped manager app actually executes.
+-MORPHE_CLI_JAR="${MORPHE_CLI_JAR:-../piko/morphe-desktop-1.11.0-all.jar}"
++MORPHE_CLI_JAR="${MORPHE_CLI_JAR:-../piko/morphe-desktop-1.19.0-all.jar}"
+ FASTDEPLOY_PLATFORM_TOOLS_VERSION="${FASTDEPLOY_PLATFORM_TOOLS_VERSION:-36.0.0}"
+ FASTDEPLOY_PLATFORM_TOOLS_DIR="${FASTDEPLOY_PLATFORM_TOOLS_DIR:-${HOME}/.cache/piko/platform-tools-${FASTDEPLOY_PLATFORM_TOOLS_VERSION}}"
+ 
 @@ -28,7 +28,7 @@
  fi
  
@@ -1242,9 +1251,10 @@
 +}
 --- /dev/null
 +++ b/patches/src/main/kotlin/app/crimera/patches/newx/misc/mediatab/ProfileBulkDownloadPatch.kt
-@@ -0,0 +1,471 @@
+@@ -0,0 +1,473 @@
 +package app.crimera.patches.newx.misc.mediatab
 +
++import app.crimera.patches.newx.utils.unsupportedOnMount
 +import app.crimera.bytecode.Block
 +import app.crimera.bytecode.RegisterLimit
 +import app.crimera.bytecode.Target
@@ -1262,16 +1272,16 @@
 +import app.crimera.patches.newx.timeline.newXTimelineFilterPatch
 +import app.crimera.patches.newx.utils.Constants.COMPATIBILITY_PROFILE_DOWNLOAD
 +import app.crimera.patches.settings.settingStrings
-+import app.crimera.patches.utils.scopedMatchAll
++import app.crimera.patches.common.scopedMatchAll
 +import app.morphe.patcher.extensions.InstructionExtensions.removeInstruction
 +import app.morphe.patcher.patch.BytecodePatchContext
 +import app.morphe.patcher.patch.PatchException
 +import app.morphe.patcher.patch.bytecodePatch
 +import app.morphe.patcher.util.proxy.mutableTypes.MutableMethod
 +import app.morphe.util.cloneMutable
-+import app.morphe.util.getReference
-+import app.morphe.util.p0Register
-+import app.morphe.util.registersUsed
++import app.morphe.patcher.util.getReference
++import app.morphe.patcher.util.p0Register
++import app.morphe.patcher.util.registersUsed
 +import com.android.tools.smali.dexlib2.AccessFlags
 +import com.android.tools.smali.dexlib2.Opcode
 +import com.android.tools.smali.dexlib2.iface.ClassDef
@@ -1324,6 +1334,7 @@
 +    description = "Downloads every accessible photo and video from a profile, with pagination, progress and cancellation.",
 +) {
 +    compatibleWith(COMPATIBILITY_PROFILE_DOWNLOAD)
++    unsupportedOnMount()
 +    dependsOn(newXProfilePhotosGalleryPatch, newXInlineDownloadButtonPatch, newXTimelineFilterPatch)
 +    newXToggle(
 +        id = "newx.post_actions_media.profile_bulk",
@@ -1716,7 +1727,7 @@
 +}
 --- a/patches/src/main/kotlin/app/crimera/patches/newx/misc/mediatab/ProfilePhotosGalleryPatch.kt
 +++ b/patches/src/main/kotlin/app/crimera/patches/newx/misc/mediatab/ProfilePhotosGalleryPatch.kt
-@@ -95,16 +95,17 @@
+@@ -96,16 +96,17 @@
      val paddingBottom: Method,
      val androidView: Method,
  )
@@ -1736,16 +1747,16 @@
      val stateType: String,
      val stateFlowGetter: NativeMethodCall,
      val stateValueGetter: NativeMethodCall,
-@@ -387,7 +388,7 @@
+@@ -388,7 +389,7 @@
  
  
  context(context: BytecodePatchContext)
 -private fun resolvePagingEvent(classDefs: List<ClassDef>): ResolvedPagingEvent {
 +internal fun resolvePagingEvent(classDefs: List<ClassDef>): ResolvedPagingEvent {
-     val classByType = classDefs.associateBy { it.type.toString() }
+     val classByType = classDefs.associateBy { it.type }
      val dispatchCandidates = classDefs.flatMap { classDef ->
-         if (!classDef.type.toString().startsWith(BOTTOM_PAGING_SCOPE)) {
-@@ -576,6 +577,7 @@
+         if (!classDef.type.startsWith(BOTTOM_PAGING_SCOPE)) {
+@@ -577,6 +578,7 @@
              .removePrefix("L")
              .removeSuffix(";")
              .replace('/', '.'),
@@ -1753,7 +1764,7 @@
          state = ResolvedPagingState(
              stateType = stateType,
              stateFlowGetter = stateFlowGetterCall,
-@@ -894,7 +896,7 @@
+@@ -895,7 +897,7 @@
          ?: throw PatchException("NewX timeline item click callback is not a renderer parameter")
  }
  
@@ -1762,8 +1773,8 @@
      val descriptor: String,
      val opcode: Opcode,
  )
-@@ -956,7 +958,7 @@
-         opcode = invocationOpcode(definingClass.toString()),
+@@ -957,7 +959,7 @@
+         opcode = invocationOpcode(definingClass),
      )
  
 -private fun isStateFlowInterface(
@@ -1771,7 +1782,7 @@
      type: String,
      classByType: Map<String, ClassDef>,
  ): Boolean {
-@@ -970,7 +972,7 @@
+@@ -971,7 +973,7 @@
  }
  
  context(context: BytecodePatchContext)
@@ -1780,7 +1791,7 @@
      flowType: String,
      classByType: Map<String, ClassDef>,
  ): NativeMethodCall {
-@@ -1569,6 +1571,33 @@
+@@ -1570,6 +1572,33 @@
      val classDefs = allClassDefs()
      val event = resolveNativePhotoViewerTarget(classDefs, timelineListDescriptor)
      val (targets, delegates) = resolveItemClickViewerTargets(event, classDefs)
@@ -1817,10 +1828,10 @@
 --- a/patches/src/main/kotlin/app/crimera/patches/newx/timeline/TimelineFilterPatch.kt
 +++ b/patches/src/main/kotlin/app/crimera/patches/newx/timeline/TimelineFilterPatch.kt
 @@ -9,10 +9,12 @@
- import app.crimera.patches.utils.scopedMatchAll
+ import app.crimera.patches.common.scopedMatchAll
  import app.morphe.patcher.patch.bytecodePatch
- import app.morphe.util.p0Register
-+import app.morphe.util.getReference
+ import app.morphe.patcher.util.p0Register
++import app.morphe.patcher.util.getReference
 +import com.android.tools.smali.dexlib2.Opcode
  
  private const val OBJECT_DESCRIPTOR = "Ljava/lang/Object;"
@@ -1859,19 +1870,21 @@
          }
 --- a/patches/src/main/kotlin/app/crimera/patches/newx/utils/Constants.kt
 +++ b/patches/src/main/kotlin/app/crimera/patches/newx/utils/Constants.kt
-@@ -5,6 +5,17 @@
+@@ -5,6 +5,19 @@
  import app.morphe.patcher.patch.Compatibility
  
  internal object Constants {
-+    // This new native integration is validated on the provided production APK.
-+    // Older targets keep their existing patches and compatibility declarations.
++    // Native profile contracts are validated on these production targets.
 +    val COMPATIBILITY_PROFILE_DOWNLOAD =
 +        Compatibility(
 +            name = "NewX",
 +            packageName = "com.twitter.android",
 +            apkFileType = ApkFileType.APKM,
 +            appIconColor = 0x000000,
-+            targets = listOf(AppTarget(version = "12.35.0-prod.01")),
++            targets = listOf(
++                AppTarget(version = "12.35.0-prod.01"),
++                AppTarget(version = "12.36.1-prod.01"),
++            ),
 +        )
 +
      val COMPATIBILITY_NEW_X =
@@ -1883,8 +1896,8 @@
 +package app.crimera.patches.newx.models
 +
 +import app.morphe.patcher.patch.PatchException
-+import app.morphe.util.getReference
-+import app.morphe.util.registersUsed
++import app.morphe.patcher.util.getReference
++import app.morphe.patcher.util.registersUsed
 +import com.android.tools.smali.dexlib2.AccessFlags
 +import com.android.tools.smali.dexlib2.Opcode
 +import com.android.tools.smali.dexlib2.iface.Method
