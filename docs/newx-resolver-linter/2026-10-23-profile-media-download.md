@@ -10,7 +10,7 @@
 - 媒体：只读取当前主页作者的帖子附件，排除引用帖子、头像和卡片。使用原图、最高码率 video/mp4，按媒体 ID 去重。文件名、重名策略、SAF 目录及按作者分文件夹通过现有 InlineDownloadButton 入队流程处理。
 - 队列：保留自己的 DownloadHandle，最多四个未结束文件；取消仅影响本次任务的网络请求和文件。进度中的“已保存”来自传输终态，而非入队数量。关闭进度窗口继续下载，再从主页菜单打开。
 - 本地验证：四个原生响应结构回归测试通过；505 条中英文资源及格式占位符检查通过；覆盖补丁可依次应用于固定上游源码；Python 语法检查通过。
-- 完整构建与目标 APK 补丁应用验证将在开发分支运行，结果补充于此。没有控制用户设备；实机菜单、登录请求和文件写入仍需实际安装验证。
+- 完整构建、12.35 基础 APK 与完整 APKM 的补丁应用，以及最终 DEX 挂钩检查均已通过，产物和命令见文末。没有控制用户设备；实机菜单、登录请求和文件写入仍需实际安装验证。
 - 发布：不创建 Release，不更新已发布的 X.26.04 或固定订阅；PR 构建仅生成 Actions 附件。
 
 ## 实际 APK 验证发现及修复
@@ -162,3 +162,19 @@ app.morphe.patcher.patch.PatchException: Native profile query is not an Apollo o
 ### 目录授权静态审计
 
 - 批量任务复用 `NewXDownloadFolders.isConfigured` 检查目标目录，同时接受持久授权 `PERSISTED` 和进程内有效授权 `LIVE`。此前只接受 `LIVE` 会误拒绝正常持久授权的目录；检查在本次 APK 验证前纠正，未发布。
+
+## 最终验证
+
+- 功能源码提交：`a1ab6d6721922cb9605f34a10ca384d5cdf472e0`；[Actions 39916942540](https://github.com/YongkeDet/Piko/actions/runs/39916942540) 成功，PR 合并验证提交 `d2009ad74cbe38ed399a292784461d05ea19e5f4`。
+- 当前源码构建通过：两个时间线测试、四个原生媒体响应解析测试、505 条中文及格式占位符校验、Android lint、`:patches:build`（含设置聚合及解析器回归 fixture）、`:patches:lintNewxResolvers`。Gradle 结果 `BUILD SUCCESSFUL`。
+- Actions 附件 `12485695796`，ZIP SHA-256 `c6881a07110a148724e0529a098e5fe08ba9ab4370db7d31c982b429896c4595`；MPP SHA-256 `03cf7bab32c0d8b06dbdd8e687f7bbcd6c61118dcd9dc00a86213af762c88355`。已核对附件、全部四个源码覆盖补丁、中文资源和 MPP 的构建信息哈希。
+- 使用 Morphe Desktop `1.11.0`，只通过当前源码的 `patch-twitter.sh` 运行下列两项离线验证（`MORPHE_CLI_JAR` 指向相同的本地工具，`PIKO_PATCH_OUTPUT` 分别指定下表产物）；未传入 `--install`。
+
+| 输入 | 堆与命令 | 结果与本地产物 |
+| --- | --- | --- |
+| `tmp_2b7ccc14/base.apk`，版本及哈希见文首 | `PATCHER_MAX_HEAP_MB=512 ./patch-twitter.sh 'E:/Artificial Intelligence/Piko/tmp_2b7ccc14/base.apk'` | 47 个补丁全部 Applied，包括 `NewX: Download all profile media`；编译、对齐、签名及 Saved to 成功。`.build/profile-patched-base-verified.apk`，SHA-256 `80ac801b584576903e6836479bcedb516f5a1217ffb84256cbe0986842e5dd56`。 |
+| 原始 `com.twitter.android_12.35.0-prod.01-312350001_2arch_2dpi_24lang_86a8e9ed2169398a8bba24d64522cf43_apkmirror.com.apkm`，SHA-256 `16607ce5e435eccb23b8b8385cbd173e672ff06f533f159e7acf2412087d6f3b` | `PATCHER_MAX_HEAP_MB=4096 ./patch-twitter.sh 'E:/Artificial Intelligence/Piko/com.twitter.android_12.35.0-prod.01-312350001_2arch_2dpi_24lang_86a8e9ed2169398a8bba24d64522cf43_apkmirror.com.apkm'` | 分包合并、47 个补丁、编译、对齐、签名及 Saved to 全部成功。`.build/profile-patched-complete-verified.apk`（arm64-v8a），SHA-256 `551a4f3f6c457b10e4d1aa57eab002bee4d26ae23b9a300f937ce8c342b1aeef`。 |
+
+- 两个最终 APK 的 DEX 均核对：菜单列表添加调用 1 处、原生点击拦截 2 处、composer 捕获 1 处、OkHttp 客户端捕获 1 处；5 个桥接方法在原抛错桩之前读取/调用已解析的原生字段及方法并返回。原有两条 `Function1.invoke` 菜单事件路径保留。另核对桥接的宽寄存器、invoke/result 配对及账号不匹配返回 null 的分支。
+- 本地日志：`.build/profile-patch-base-verified.log`、`.build/profile-patch-complete-verified.log`。交付预览：`dist/profile-media-preview/Piko-profile-media-preview.mpp`，附原始 `build-info.json` 和 SHA256SUMS。
+- 验证边界：未提供 12.34 原始 APK，未验证该版本的新功能；未安装、启动或控制设备。实际菜单布局、账号签名请求、SAF 写入、取消和长列表翻页仍需实机确认。已发布版本与订阅保持 X.26.04 原状。
