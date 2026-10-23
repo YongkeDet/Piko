@@ -14,10 +14,14 @@
 - 连续三页没有新的附件标识，或游标重复时停止翻页；收到明确结束信号时正常结束。一个或两个空页不会立即截断，发现新附件重置计数。
 - 分页使用未按下载类型筛选的附件标识；包括不可用附件，避免“仅图片”遇到视频页、或遇到失效媒体时误判末尾。重复附件不会持续重置进展。
 - 停止翻页后继续等待已入队文件结束；不再因重复游标抛异常并取消本批剩余文件。保护停止使用独立状态文案，不声称已确认全部结果。每一页都刷新进度，包括空页和重复页。
-- 所有修改为扩展业务逻辑与资源；未改动原生混淆成员匹配、字节码发射库、登录凭据或发布配置。
+- 所有修改为扩展业务逻辑、资源及资源数量元数据；未改动原生混淆成员匹配、字节码发射库或登录凭据，未更新正式发布或订阅。
 
 ## 验证
 
 - 既有 `ProfileMediaPageTest` 增加实际解析 → 生产分页入口回归：游标不断变化的空页和重复附件页均有界停止；新视频/不可用附件重置计数；重复游标最后一页的媒体保留；明确终止与空页容错保持。连同原媒体解析用例共 7 项，通过 Java 17 目标编译及 JUnit 4.13.2。
 - 覆盖补丁重新生成并通过固定上游的 `git apply --check`；资源增加一条双语状态文案，共 506 条。
-- 修复包完整构建和目标 APK 验证结果将在完成后补充。未安装、启动或操作手机；尚未取得本问题修复后的实机反馈。
+- 修复源码 `f3ba93c51076e6008485ee32e77e38fe724d2b9f`，[Actions 39919703081](https://github.com/YongkeDet/Piko/actions/runs/39919703081) 完整构建成功；验证提交 `c45bc058070a3caeb008ce9c91e5ec54e65c627c`。云端 7 项媒体/分页、2 项时间线、506 条资源、Android lint、`:patches:build`（含聚合与解析器回归）及 `:patches:lintNewxResolvers` 均通过。
+- 附件 `12486842309`，ZIP SHA-256 `84d27a3af51f7abcb995d40ad581682d36d8814adef97cab45619421a61a1d0b`，MPP SHA-256 `829c95a658421391967dc11eba6e139798d8f92d20eaaada8309bc05d165fc56`。已核对构建信息中的四个覆盖补丁、中文资源及 MPP 哈希。
+- 通过当前源码 `patch-twitter.sh`，在 `PATCHER_MAX_HEAP_MB=4096` 下对原始 12.35 完整 APKM 离线应用补丁（输入 SHA-256 `16607ce5e435eccb23b8b8385cbd173e672ff06f533f159e7acf2412087d6f3b`）。全部 47 个补丁 Applied，包括 `NewX: Download all profile media`；编译、对齐、签名、Saved to 成功。输出 `.build/profile-pagination-fixed.apk`，SHA-256 `50c84bf75cf803eab9a24e03c6f9fd6bada6a5d50c142a0776596805a53ecbca`，日志 `.build/profile-pagination-fixed.log`。
+- 最终 DEX 核对：生产循环实际调用 `Pagination.next`，空游标分支离开翻页循环；随后等待 `pending` 为空，才设置保护停止状态。分页方法包含阈值 3、重复游标及返回 null 分支。五处原生挂钩、五个桥接、两条原菜单事件路径继续通过核对，审计文本 `.build/profile-pagination-dex-audit.txt`。
+- 本地交付 `dist/profile-media-preview/Piko-profile-media-pagination-fix.mpp`；同目录通用预览文件也更新为此修复版，附构建信息及校验和。未安装、启动或操作手机；尚未取得本问题修复后的实机反馈，12.34 未验证。

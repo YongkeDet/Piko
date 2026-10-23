@@ -10,7 +10,7 @@
 
 此功能通过 `source-patches/0004-profile-media-download.patch` 应用于固定上游源码。开发构建只上传 Actions 附件，尚未更新已发布的 X.26.04 及固定订阅。X 限流、失效媒体或读取失败会显示状态，不会将部分结果当成全部下载完成。
 
-当前预览已通过完整构建、X 12.35 基础 APK（512 MB 堆）及完整 APKM（4 GB 堆）的全部补丁应用和最终字节码检查。实机界面、登录请求和下载行为尚未验证，12.34 也未做此次新功能的 APK 验证。见 [实现及验证记录](docs/newx-resolver-linter/2026-10-23-profile-media-download.md)。
+主页下载基线已通过完整构建、X 12.35 基础 APK（512 MB 堆）及完整 APKM（4 GB 堆）的全部补丁应用和最终字节码检查。本次分页停止修复重新通过 7 项媒体/分页测试、完整构建及 12.35 完整 APKM 验证；修复后的实机行为与 12.34 尚未验证。见 [实现记录](docs/newx-resolver-linter/2026-10-23-profile-media-download.md) 及 [分页停止修复记录](docs/newx-resolver-linter/2026-10-23-profile-pagination.md)。
 
 ## 当前发布
 
