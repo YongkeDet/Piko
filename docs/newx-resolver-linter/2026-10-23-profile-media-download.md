@@ -113,3 +113,48 @@ app.morphe.patcher.patch.PatchException: Expected exactly one profile download U
 - 回归：既有 `NewXResolverLinterTest` 通过生产选择入口覆盖“注册表 + 正确查询”、仅注册表和多个生成查询。
 
 - 后续完整字节码审计发现 OAuth 范围内另有一个保存 UserIdentifier 的拦截器。账号桥接进一步要求原生 `X-Twitter-Active-User` 请求头语义锚点；既有 fixture 集加入对应正反例。此项是在再次应用前发现的歧义，不属于实机失败。
+
+### Apollo Query 标记接口
+
+- 代码提交 `c319f80576651d9b4497c89c6e79e6831767c2ed`，验证构建提交 `487dea3a1b2251475b62606c54558f5eb3899661`，MPP SHA-256 `2fc517b1eff5ed73485dfff528c88be0481f13fff182ee33c62e8d2d772d9a7f`。同一基础 APK 和 512 MB 堆，异常如下：
+
+```text
+app.morphe.patcher.patch.PatchException: Native profile query is not an Apollo operation
+	at app.crimera.patches.newx.misc.profiledownload.ProfileMediaDownloadPatchKt.newXProfileMediaDownloadPatch$lambda$0$0(ProfileMediaDownloadPatch.kt:135)
+	at app.morphe.patcher.patch.Patch.execute(Patch.kt:126)
+	at app.morphe.patcher.patch.BytecodePatch.execute$morphe_patcher(Patch.kt:241)
+	at app.morphe.patcher.Patcher$invoke$1.invokeSuspend$execute(Patcher.kt:96)
+	at app.morphe.patcher.Patcher$invoke$1.invokeSuspend(Patcher.kt:120)
+	at app.morphe.patcher.Patcher$invoke$1.invoke(Patcher.kt)
+	at app.morphe.patcher.Patcher$invoke$1.invoke(Patcher.kt)
+	at kotlinx.coroutines.flow.SafeFlow.collectSafely(Builders.kt:57)
+	at kotlinx.coroutines.flow.AbstractFlow.collect(Flow.kt:226)
+	at app.morphe.cli.command.PatchCommand$call$3$3$1.invokeSuspend(PatchCommand.kt:794)
+	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:34)
+	at kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:100)
+	at kotlinx.coroutines.EventLoopImplBase.processNextEvent(EventLoop.common.kt:256)
+	at kotlinx.coroutines.BlockingCoroutine.joinBlocking(Builders.kt:54)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlockingImpl(Builders.kt:30)
+	at kotlinx.coroutines.BuildersKt.runBlockingImpl(Unknown Source)
+	at kotlinx.coroutines.BuildersKt__Builders_concurrentKt.runBlockingK(Builders.concurrent.kt:172)
+	at kotlinx.coroutines.BuildersKt.runBlockingK(Unknown Source)
+	at kotlinx.coroutines.BuildersKt__Builders_concurrentKt.runBlockingK$default(Builders.concurrent.kt:157)
+	at kotlinx.coroutines.BuildersKt.runBlockingK$default(Unknown Source)
+	at app.morphe.cli.command.PatchCommand.call$lambda$13$2(PatchCommand.kt:793)
+	at app.morphe.cli.command.model.PatchingResultKt.addStepResult(PatchingResult.kt:29)
+	at app.morphe.cli.command.PatchCommand.call(PatchCommand.kt:790)
+	at app.morphe.cli.command.PatchCommand.call(PatchCommand.kt:55)
+	at picocli.CommandLine.executeUserObject(CommandLine.java:2031)
+	at picocli.CommandLine.access$1500(CommandLine.java:148)
+	at picocli.CommandLine$RunLast.executeUserObjectOfLastSubcommandWithSameParent(CommandLine.java:2469)
+	at picocli.CommandLine$RunLast.handle(CommandLine.java:2461)
+	at picocli.CommandLine$RunLast.handle(CommandLine.java:2423)
+	at picocli.CommandLine$AbstractParseResultHandler.execute(CommandLine.java:2277)
+	at picocli.CommandLine$RunLast.execute(CommandLine.java:2425)
+	at picocli.CommandLine.execute(CommandLine.java:2174)
+	at app.morphe.MorpheLauncherKt.main(MorpheLauncher.kt:23)
+```
+
+- 实际继承链为生成 Query → Query 标记接口 → Operation。共享库 0.8.0 的 `isAssignableTo` 检查直接接口和父类，没有遍历接口的父接口，所以直接传生成类产生了假阴性。
+- 本补丁只适配已验证的 Apollo Query 标记契约：对生成类明确声明的标记接口调用现有共享辅助函数，再验证它可赋给原生请求的 Operation。没有复制通用层级遍历器，也没有修改共享库或影响旧的集合检查。
+- 回归：既有原生查询 fixture 增加真实两级类型链、注册表和不兼容 Operation 控制例，通过生产入口 `supportsNativeProfileOperation` 验证。

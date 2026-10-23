@@ -748,7 +748,7 @@
 +}
 --- /dev/null
 +++ b/patches/src/main/kotlin/app/crimera/patches/newx/misc/profiledownload/ProfileMediaDownloadPatch.kt
-@@ -0,0 +1,315 @@
+@@ -0,0 +1,324 @@
 +package app.crimera.patches.newx.misc.profiledownload
 +
 +import app.crimera.bytecode.Block
@@ -883,7 +883,9 @@
 +                    field.type.startsWith("Lcom/apollographql/apollo/api/") && !field.type.startsWith("Lcom/apollographql/apollo/api/http/")
 +            }
 +        }.distinctBy(FieldReference::toString))
-+        if (!isAssignableTo(queryClass.type, operationField.type)) throw PatchException("Native profile query is not an Apollo operation")
++        if (!supportsNativeProfileOperation(queryClass, operationField.type) { source, target -> isAssignableTo(source, target) }) {
++            throw PatchException("Native profile query does not implement the resolved Apollo operation: ${queryClass.type} -> ${operationField.type}")
++        }
 +        val requestCtor = requireExactlyOne("native GraphQL request builder", requestClass.methods.filter {
 +            it.name == "<init>" && it.parameterTypes.map(CharSequence::toString) == listOf(operationField.type)
 +        })
@@ -1030,6 +1032,13 @@
 +        method.parameterTypes.map(CharSequence::toString) == listOf("Lokhttp3/Interceptor\$Chain;") &&
 +        method.code().any { it.getReference<StringReference>()?.string == "X-Twitter-Active-User" }
 +
++/** Generated Query implements a marker interface, which extends the request's Operation. */
++internal fun supportsNativeProfileOperation(
++    query: ClassDef,
++    operation: String,
++    assignable: (String, String) -> Boolean,
++): Boolean = query.interfaces.any { marker -> assignable(marker, operation) }
++
 +/** Operation registries carry the same name string as generated query classes. */
 +internal fun selectNativeProfileMediaQuery(candidates: Collection<ClassDef>): ClassDef =
 +    requireExactlyOne("native profile media query class", candidates.filter { classDef ->
@@ -1066,17 +1075,18 @@
 +}
 --- a/patches/src/test/kotlin/app/crimera/tools/newx/NewXResolverLinterTest.kt
 +++ b/patches/src/test/kotlin/app/crimera/tools/newx/NewXResolverLinterTest.kt
-@@ -1,6 +1,9 @@
+@@ -1,6 +1,10 @@
  package app.crimera.tools.newx
  
  import app.crimera.patches.newx.misc.canonicalurls.constructsProfileHeaderModel
 +import app.crimera.patches.newx.misc.profiledownload.isNativeProfileMediaComposer
 +import app.crimera.patches.newx.misc.profiledownload.selectNativeProfileMediaQuery
 +import app.crimera.patches.newx.misc.profiledownload.isNativeActiveUserInterceptor
++import app.crimera.patches.newx.misc.profiledownload.supportsNativeProfileOperation
  import app.crimera.patches.newx.misc.mediatab.isInitialSubTabSeed
  import app.crimera.patches.newx.misc.mediatab.isPendingSubTabStore
  import app.crimera.patches.newx.models.isInlineActionKindModelConstructor
-@@ -19,6 +22,7 @@
+@@ -19,6 +23,7 @@
  import com.android.tools.smali.dexlib2.iface.Method
  import com.android.tools.smali.dexlib2.iface.instruction.Instruction
  import com.android.tools.smali.dexlib2.immutable.ImmutableAnnotation
@@ -1084,7 +1094,7 @@
  import com.android.tools.smali.dexlib2.immutable.ImmutableMethod
  import com.android.tools.smali.dexlib2.immutable.ImmutableMethodParameter
  import java.nio.file.Files
-@@ -31,6 +35,75 @@
+@@ -31,6 +36,82 @@
  import kotlin.test.assertTrue
  
  class NewXResolverLinterTest {
@@ -1109,6 +1119,13 @@
 +        val query = profileQueryFixture("Lfixture/GeneratedQuery;", true)
 +        val registry = profileQueryFixture("Lfixture/OperationRegistry;", false)
 +        assertEquals(query.type, selectNativeProfileMediaQuery(listOf(registry, query)).type)
++        // The shared assignability helper accepts direct interfaces, not arbitrary interface chains.
++        val directInterfaceCheck: (String, String) -> Boolean = { source, target ->
++            source == "Lfixture/Query;" && target == "Lfixture/Operation;"
++        }
++        assertTrue(supportsNativeProfileOperation(query, "Lfixture/Operation;", directInterfaceCheck))
++        assertFalse(supportsNativeProfileOperation(registry, "Lfixture/Operation;", directInterfaceCheck))
++        assertFalse(supportsNativeProfileOperation(query, "Lfixture/OtherOperation;", directInterfaceCheck))
 +        assertFailsWith<PatchException> { selectNativeProfileMediaQuery(listOf(registry)) }
 +        assertFailsWith<PatchException> {
 +            selectNativeProfileMediaQuery(listOf(query, profileQueryFixture("Lfixture/OtherQuery;", true)))
@@ -1132,7 +1149,7 @@
 +                    addInstruction("return-void".toInstruction())
 +                }.methodImplementation),
 +        ) else listOf(literalMethod("registryEntry", "UserProfileMediaTimelineQuery"))
-+        return ImmutableClassDef(owner, AccessFlags.PUBLIC.value, "Ljava/lang/Object;", emptyList(), null,
++        return ImmutableClassDef(owner, AccessFlags.PUBLIC.value, "Ljava/lang/Object;", if (generated) listOf("Lfixture/Query;") else emptyList(), null,
 +            emptySet(), emptyList(), methods)
 +    }
 +
