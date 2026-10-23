@@ -19,7 +19,7 @@
      public static boolean isTimelineDataEmpty(List<?> pages) {
 --- a/patches/src/main/kotlin/app/crimera/patches/newx/timeline/DisableTimelineRefreshPatch.kt
 +++ b/patches/src/main/kotlin/app/crimera/patches/newx/timeline/DisableTimelineRefreshPatch.kt
-@@ -50,20 +50,15 @@
+@@ -51,20 +51,15 @@
  private const val GET_INTENT_DESCRIPTOR = "Landroid/app/Activity;->getIntent()$INTENT_DESCRIPTOR"
  private const val MARK_POST_DEEP_LINK_DESCRIPTOR =
      "$TIMELINE_REFRESH_GATE_DESCRIPTOR->markPostDeepLink($INTENT_DESCRIPTOR)V"
@@ -43,16 +43,16 @@
  
  private object NewXMainActivityOnCreateFingerprint : Fingerprint(
      definingClass = "Lcom/x/android/main/MainActivity;",
-@@ -154,7 +149,7 @@
+@@ -155,7 +150,7 @@
  val disableTimelineRefreshPatch =
      bytecodePatch(
          name = "NewX: Disable automatic timeline refresh",
 -        description = "Prevents automatic timeline jumps on startup and foregrounding.",
 +        description = "Only pull-to-refresh may replace a loaded timeline; initial loads and pagination remain available.",
      ) {
+         unsupportedOnMount()
          compatibleWith(COMPATIBILITY_NEW_X)
- 
-@@ -319,6 +314,16 @@
+@@ -321,6 +316,16 @@
              val requestTypeDescriptor =
                  requestCallReference.parameterTypes.firstOrNull()?.toString()?.takeIf { it.startsWith("L") }
                      ?: throw PatchException("NewX URT repository request has no object request-type parameter")
@@ -69,7 +69,7 @@
              val repositoryClass = mutableClassDefBy(repoDescriptor)
              val timelineGetterMatches =
                  repositoryClass.methods.filter { method ->
-@@ -466,9 +471,8 @@
+@@ -468,9 +473,8 @@
                  val settingRegister = read.register
                  val requestRegister = method.p0Register + 1
                  val cursorRegister = method.p0Register + 2
@@ -81,7 +81,7 @@
                  method.insertHook(
                      index = read.nextIndex,
                      // The setting read sits in front of the hook, so the pool must not hand its
-@@ -481,9 +485,6 @@
+@@ -483,9 +487,6 @@
                      // The timeline value stays live across the enum comparisons.
                      val timelineRegister = scratchRegister()
                      ifEqz(settingRegister, Target.Original)
@@ -91,7 +91,7 @@
                      invokeVirtual(methodReference(repositoryTimelineGetterReference), method.p0Register)
                      moveResult(timelineRegister, timelineEnumDescriptor)
                      for (timelineName in suppressedTimelineNames) {
-@@ -495,21 +496,20 @@
+@@ -497,21 +498,20 @@
                      }
                      goto(Target.Original)
                      label(URT_SUPPRESS_LABEL)
@@ -121,7 +121,7 @@
                      invokeVirtual(methodReference(repositoryTimelineIdentityGetterReference), method.p0Register)
                      moveResult(settingRegister, timelineIdentityDescriptor)
                      iget(settingRegister, settingRegister, timelineIdentityField)
-@@ -522,6 +522,8 @@
+@@ -524,6 +524,8 @@
                      ifEqz(settingRegister, Target.Original)
                      sget(requestRegister, fieldReference(repositoryViewportAwareAutoRefreshFieldReference))
                      goto(Target.Original)
@@ -130,7 +130,7 @@
                  }
              }
  
-@@ -563,12 +565,6 @@
+@@ -565,12 +567,6 @@
                  relocateBranchTargets = true,
              ) {
                  ifEqz(settingRead.register, Target.Original)
