@@ -63,3 +63,51 @@ app.morphe.patcher.patch.PatchException: Failed to match the fingerprint: app.mo
 - 定位：composer 指纹的 InstructionFilter 按顺序匹配 URL → variables → features，实际 12.35 的同一方法先加载 features 再加载 variables。原因属于解析器逻辑，不是 linter 或基数辅助函数。
 - 修复：仅用端点字符串作候选索引，再通过 `isNativeProfileMediaComposer` 检查三个标签的集合、HTTP 返回类型和参数形状；字符串加载顺序不再作为契约。
 - 回归：加入既有 `NewXResolverLinterTest`，覆盖两种标签顺序、缺少 features、错误返回类型，直接调用生产选择条件。
+
+### 查询类与查询注册表重名
+
+- 后续代码提交 `129ae3ef7afa812fa95ab475f695383c3e5e7f41`，构建验证提交 `1518e9e0b30b3f16baf6a9aa665de5fb8c6a6e95`；MPP SHA-256 `a9e8ab9dfc952bdfc1e6e3c05e552e32f95487f1cd3204963c5c21594b0dad24`。同一基础 APK、CLI、脚本和 512 MB 堆，异常如下：
+
+```text
+app.morphe.patcher.patch.PatchException: Expected exactly one profile download UserProfileMediaTimelineQuery class, found 2: [Lcom/x/android/p0;, Lcom/x/android/main/e11;]
+	at app.crimera.patches.common.ResolverCardinalityKt.requireExactlyOne(ResolverCardinality.kt:15)
+	at app.crimera.patches.common.ResolverCardinalityKt.requireExactlyOne$default(ResolverCardinality.kt:8)
+	at app.crimera.patches.newx.misc.profiledownload.ProfileMediaDownloadPatchKt.markedClass(ProfileMediaDownloadPatch.kt:265)
+	at app.crimera.patches.newx.misc.profiledownload.ProfileMediaDownloadPatchKt.newXProfileMediaDownloadPatch$lambda$0$0(ProfileMediaDownloadPatch.kt:124)
+	at app.morphe.patcher.patch.Patch.execute(Patch.kt:126)
+	at app.morphe.patcher.patch.BytecodePatch.execute$morphe_patcher(Patch.kt:241)
+	at app.morphe.patcher.Patcher$invoke$1.invokeSuspend$execute(Patcher.kt:96)
+	at app.morphe.patcher.Patcher$invoke$1.invokeSuspend(Patcher.kt:120)
+	at app.morphe.patcher.Patcher$invoke$1.invoke(Patcher.kt)
+	at app.morphe.patcher.Patcher$invoke$1.invoke(Patcher.kt)
+	at kotlinx.coroutines.flow.SafeFlow.collectSafely(Builders.kt:57)
+	at kotlinx.coroutines.flow.AbstractFlow.collect(Flow.kt:226)
+	at app.morphe.cli.command.PatchCommand$call$3$3$1.invokeSuspend(PatchCommand.kt:794)
+	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:34)
+	at kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:100)
+	at kotlinx.coroutines.EventLoopImplBase.processNextEvent(EventLoop.common.kt:256)
+	at kotlinx.coroutines.BlockingCoroutine.joinBlocking(Builders.kt:54)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlockingImpl(Builders.kt:30)
+	at kotlinx.coroutines.BuildersKt.runBlockingImpl(Unknown Source)
+	at kotlinx.coroutines.BuildersKt__Builders_concurrentKt.runBlockingK(Builders.concurrent.kt:172)
+	at kotlinx.coroutines.BuildersKt.runBlockingK(Unknown Source)
+	at kotlinx.coroutines.BuildersKt__Builders_concurrentKt.runBlockingK$default(Builders.concurrent.kt:157)
+	at kotlinx.coroutines.BuildersKt.runBlockingK$default(Unknown Source)
+	at app.morphe.cli.command.PatchCommand.call$lambda$13$2(PatchCommand.kt:793)
+	at app.morphe.cli.command.model.PatchingResultKt.addStepResult(PatchingResult.kt:29)
+	at app.morphe.cli.command.PatchCommand.call(PatchCommand.kt:790)
+	at app.morphe.cli.command.PatchCommand.call(PatchCommand.kt:55)
+	at picocli.CommandLine.executeUserObject(CommandLine.java:2031)
+	at picocli.CommandLine.access$1500(CommandLine.java:148)
+	at picocli.CommandLine$RunLast.executeUserObjectOfLastSubcommandWithSameParent(CommandLine.java:2469)
+	at picocli.CommandLine$RunLast.handle(CommandLine.java:2461)
+	at picocli.CommandLine$RunLast.handle(CommandLine.java:2423)
+	at picocli.CommandLine$AbstractParseResultHandler.execute(CommandLine.java:2277)
+	at picocli.CommandLine$RunLast.execute(CommandLine.java:2425)
+	at picocli.CommandLine.execute(CommandLine.java:2174)
+	at app.morphe.MorpheLauncherKt.main(MorpheLauncher.kt:23)
+```
+
+- 定位：操作名称同时存在于注册表 `Lcom/x/android/p0;` 和生成类 `Lcom/x/android/main/e11;`。基数校验正确拒绝歧义；问题属于解析器缺少查询契约筛选，不是 linter 或辅助函数故障。
+- 修复：候选必须同时提供操作名方法、媒体查询文档和已验证的双 String 构造器，再要求恰好一项。没有写入上述混淆类名。
+- 回归：既有 `NewXResolverLinterTest` 通过生产选择入口覆盖“注册表 + 正确查询”、仅注册表和多个生成查询。

@@ -748,7 +748,7 @@
 +}
 --- /dev/null
 +++ b/patches/src/main/kotlin/app/crimera/patches/newx/misc/profiledownload/ProfileMediaDownloadPatch.kt
-@@ -0,0 +1,294 @@
+@@ -0,0 +1,309 @@
 +package app.crimera.patches.newx.misc.profiledownload
 +
 +import app.crimera.bytecode.Block
@@ -872,7 +872,7 @@
 +            filters = listOf(string("https://api.x.com/graphql")),
 +            custom = { method, _ -> isNativeProfileMediaComposer(method) },
 +        ).scopedMatchAll()).method
-+        val queryClass = markedClass("UserProfileMediaTimelineQuery")
++        val queryClass = selectNativeProfileMediaQuery(classDefByStrings("UserProfileMediaTimelineQuery"))
 +        val queryCtor = requireExactlyOne("native profile media query constructor", queryClass.methods.filter {
 +            it.name == "<init>" && it.parameterTypes.map(CharSequence::toString) == listOf(STRING, STRING)
 +        })
@@ -1024,6 +1024,21 @@
 +    return labels.containsAll(listOf("https://api.x.com/graphql", "variables", "features"))
 +}
 +
++/** Operation registries carry the same name string as generated query classes. */
++internal fun selectNativeProfileMediaQuery(candidates: Collection<ClassDef>): ClassDef =
++    requireExactlyOne("native profile media query class", candidates.filter { classDef ->
++        classDef.methods.any { method ->
++            method.name == "name" && method.parameterTypes.isEmpty() && method.returnType == STRING &&
++                method.code().any { it.getReference<StringReference>()?.string == "UserProfileMediaTimelineQuery" }
++        } && classDef.methods.any { method ->
++            method.name == "<init>" && method.parameterTypes.map(CharSequence::toString) == listOf(STRING, STRING)
++        } && classDef.methods.any { method ->
++            method.parameterTypes.isEmpty() && method.returnType == STRING && method.code().any {
++                it.getReference<StringReference>()?.string?.startsWith("query UserProfileMediaTimelineQuery(") == true
++            }
++        }
++    })
++
 +private fun Instruction.isListOfNotNull(): Boolean = getReference<MethodReference>()?.let {
 +    it.definingClass == "Lkotlin/collections/CollectionsKt;" && it.name == "listOfNotNull" &&
 +        it.parameterTypes.map(CharSequence::toString) == listOf("[Ljava/lang/Object;") && it.returnType == LIST
@@ -1045,18 +1060,60 @@
 +}
 --- a/patches/src/test/kotlin/app/crimera/tools/newx/NewXResolverLinterTest.kt
 +++ b/patches/src/test/kotlin/app/crimera/tools/newx/NewXResolverLinterTest.kt
-@@ -1,6 +1,7 @@
+@@ -1,6 +1,8 @@
  package app.crimera.tools.newx
  
  import app.crimera.patches.newx.misc.canonicalurls.constructsProfileHeaderModel
 +import app.crimera.patches.newx.misc.profiledownload.isNativeProfileMediaComposer
++import app.crimera.patches.newx.misc.profiledownload.selectNativeProfileMediaQuery
  import app.crimera.patches.newx.misc.mediatab.isInitialSubTabSeed
  import app.crimera.patches.newx.misc.mediatab.isPendingSubTabStore
  import app.crimera.patches.newx.models.isInlineActionKindModelConstructor
-@@ -32,6 +33,27 @@
+@@ -19,6 +21,7 @@
+ import com.android.tools.smali.dexlib2.iface.Method
+ import com.android.tools.smali.dexlib2.iface.instruction.Instruction
+ import com.android.tools.smali.dexlib2.immutable.ImmutableAnnotation
++import com.android.tools.smali.dexlib2.immutable.ImmutableClassDef
+ import com.android.tools.smali.dexlib2.immutable.ImmutableMethod
+ import com.android.tools.smali.dexlib2.immutable.ImmutableMethodParameter
+ import java.nio.file.Files
+@@ -31,6 +34,59 @@
+ import kotlin.test.assertTrue
  
  class NewXResolverLinterTest {
-     @Test
++    @Test
++    fun `native profile query excludes the operation registry and rejects ambiguous generated queries`() {
++        val query = profileQueryFixture("Lfixture/GeneratedQuery;", true)
++        val registry = profileQueryFixture("Lfixture/OperationRegistry;", false)
++        assertEquals(query.type, selectNativeProfileMediaQuery(listOf(registry, query)).type)
++        assertFailsWith<PatchException> { selectNativeProfileMediaQuery(listOf(registry)) }
++        assertFailsWith<PatchException> {
++            selectNativeProfileMediaQuery(listOf(query, profileQueryFixture("Lfixture/OtherQuery;", true)))
++        }
++    }
++
++    private fun profileQueryFixture(owner: String, generated: Boolean): ImmutableClassDef {
++        fun literalMethod(name: String, literal: String) = ImmutableMethod(
++            owner, name, emptyList(), "Ljava/lang/String;", AccessFlags.PUBLIC.value,
++            emptySet(), emptySet(), MethodImplementationBuilder(1).apply {
++                addInstruction("const-string v0, \"$literal\"".toInstruction())
++                addInstruction("return-object v0".toInstruction())
++            }.methodImplementation,
++        )
++        val methods = if (generated) listOf(
++            literalMethod("name", "UserProfileMediaTimelineQuery"),
++            literalMethod("document", "query UserProfileMediaTimelineQuery("),
++            ImmutableMethod(owner, "<init>", List(2) { ImmutableMethodParameter("Ljava/lang/String;", emptySet(), null) },
++                "V", AccessFlags.PUBLIC.value, emptySet(), emptySet(), MethodImplementationBuilder(3).apply {
++                    addInstruction("invoke-direct {v0}, Ljava/lang/Object;-><init>()V".toInstruction())
++                    addInstruction("return-void".toInstruction())
++                }.methodImplementation),
++        ) else listOf(literalMethod("registryEntry", "UserProfileMediaTimelineQuery"))
++        return ImmutableClassDef(owner, AccessFlags.PUBLIC.value, "Ljava/lang/Object;", emptyList(), null,
++            emptySet(), emptyList(), methods)
++    }
++
++    @Test
 +    fun `native profile composer accepts either feature variable label order and rejects incomplete shapes`() {
 +        val endpoint = "https://api.x.com/graphql"
 +        assertTrue(isNativeProfileMediaComposer(profileComposerFixture(listOf(endpoint, "features", "variables"))))
@@ -1077,7 +1134,6 @@
 +            }.methodImplementation,
 +        )
 +
-+    @Test
+     @Test
      fun `new-post resolver survives null-check churn and rejects modifier lookalike`() {
          val controlRenderer = newPostRendererFixture(namedNullCheck = true, directModifier = true)
-         val controlLookalike = newPostRendererFixture(namedNullCheck = true, directModifier = false)
