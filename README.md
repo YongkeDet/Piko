@@ -1,6 +1,12 @@
 # Piko 中文补丁
 
-当前版本 **X.26.10**，共 516 条中文设置和下载窗口文案。
+当前版本 **X.26.11**，共 1316 条中文界面文本。
+
+## 管理功能开关中文名称
+
+在“Piko 设置 → 高级 → 功能开关 → 管理功能开关”中，为从当前 X 12.35 安装包识别出的 796 个开关提供中文名称。支持按中文名称或原始英文键名搜索，列表及编辑窗口保留原始键名，布尔值、空列表和空字符串增加中文显示。界面沿用 Piko 的字体、列表、搜索高亮和主题。
+
+中文名称是对键名的释义；未收录的动态开关显示原名。不会向列表添加未发现的开关，也不会修改任何实际键名、保存值、导入导出格式或已有覆盖配置。原始字符串、列表项及数值保留原值。详见 [X.26.11 汉化记录](docs/2026-10-23-feature-switch-chinese.md)。
 
 ## 用户主页批量下载
 
@@ -32,13 +38,13 @@ https://github.com/YongkeDet/Piko
 https://raw.githubusercontent.com/YongkeDet/Piko/main/patches-bundle.json
 ```
 
-固定来源地址不变，检查更新即可获取 X.26.10；已安装的 X 需要重新应用补丁后更新安装。也可在 [X.26.10 发布页](https://github.com/YongkeDet/Piko/releases/tag/X.26.10) 下载 `.mpp`。来源格式遵循 [Morphe 官方说明](https://github.com/MorpheApp/morphe-manager/blob/main/docs/patch-sources.md)。订阅仅在构建和发布成功后更新。
+固定来源地址不变，检查更新即可获取 X.26.11；已安装的 X 需要重新应用补丁后更新安装。也可在 [X.26.11 发布页](https://github.com/YongkeDet/Piko/releases/tag/X.26.11) 下载 `.mpp`。来源格式遵循 [Morphe 官方说明](https://github.com/MorpheApp/morphe-manager/blob/main/docs/patch-sources.md)。订阅仅在构建和发布成功后更新。
 
 ## 构建与回退
 
 云端使用 `UPSTREAM.json` 固定的源码及构建脚本，并应用 `source-patches/`。工作流验证中文资源和占位符，运行分页与时间线测试、NewX resolver 检查和完整构建，生成补丁包、构建信息及 SHA-256 校验值。既有补丁支持 X `12.34.0-prod.01` 和 `12.35.0-prod.01`，本次新增下载功能仅支持后者。仓库不包含第三方 X 安装包。
 
-- X.26.10 单独发布；X.26.04 及此前版本的标签和发布产物保留。
+- X.26.11 单独发布，更新前的 main 保存在 `backup/before-X.26.11`（`1223942160541711ac16bacca252a299f550958a`）；X.26.10、X.26.04 及此前版本的标签和发布产物保留。
 - 更新前已发布源码：`backup/before-X.26.10`（`9beddd580ecf928e1b034c9132c1fa1f32eb712e`）。
 - 此前 API 下载预览：`backup/profile-api-preview-before-X.26.10`（`5708520271180cdc648d26e783544996ef43484d`）。
 - 回退补丁时下载旧 Releases 中的 `.mpp`；查看旧源码时从对应标签或备份分支创建分支，保留现有历史。

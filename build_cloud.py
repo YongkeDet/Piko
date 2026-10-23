@@ -52,6 +52,10 @@ def main() -> None:
         "download_dialog_resources_sha256": hashlib.sha256(
             (root / "localizations/values/newx/download-dialogs.xml").read_bytes()
         ).hexdigest(),
+        "english_resources_sha256": {
+            path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted((root / "localizations/values/newx").glob("*.xml"))
+        },
     }
     (dist / "build-info.json").write_text(
         json.dumps(provenance, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
