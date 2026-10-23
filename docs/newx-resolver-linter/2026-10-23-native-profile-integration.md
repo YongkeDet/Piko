@@ -32,10 +32,23 @@
 - 完整 APKM SHA-256：`16607ce5e435eccb23b8b8385cbd173e672ff06f533f159e7acf2412087d6f3b`。
 - 使用当前提交云端构建 MPP，再通过同一源码的 `patch-twitter.sh` 显式指定输入；不混用旧 MPP。
 
-本地 ECJ/Java 17 编译生产 Pager 与测试，JUnit **20/20 通过**。云端完整构建、resolver 检查和最终离线 APK 结果将在验证后追加。设备行为尚未验证，未安装、启动或控制设备。
+本地 ECJ/Java 17 编译生产 Pager 与测试，JUnit **20/20 通过**。设备行为尚未验证，未安装、启动或控制设备。
 
 ### 首轮构建依赖修复
 
 提交 `0f298ea854edfbd0da7f43e970cd6cbf1b9501ac` 的 [Actions 39926398213](https://github.com/YongkeDet/Piko/actions/runs/39926398213) 在 `:patches:compileKotlin` 失败：`ProfileBulkDownloadPatch.kt:12:40 Unresolved reference 'modelFieldsByAppendOrder'`，后续类型推断错误由此派生；Android 扩展 Java 编译、516 条资源、2 项时间线和 20 项分页测试均已通过，未产出 MPP 或执行 APK 补丁。
 
 原因是参考项目额外提供了 `models/BooleanModelLabels.kt`，固定上游中没有该文件。同步改编此辅助函数：按 StringBuilder 追加顺序追踪字段和 R8 静态 helper，拒绝条件控制流、过深嵌套及歧义标签。属于源码依赖遗漏，不是 resolver linter、cardinality helper 或 APK 合同失败。
+
+### 整合验证通过
+
+- 功能及依赖修复提交：`c1e927ccee82109bae692b9a1644f6cf61375080`；PR 合并预览构建提交：`f48ec475daa7ecf19708f145ec0af78724e1055c`。
+- [Actions 39927078181](https://github.com/YongkeDet/Piko/actions/runs/39927078181) 成功完成 `clean buildAndroid :patches:build :patches:lintNewxResolvers --no-daemon`，包含设置聚合测试、两项宿主解析回归；独立 2 项时间线和 20 项生产分页测试通过。Resolver lint passed。
+- Actions 附件 `12489592559` 的 ZIP SHA-256：`3a3ff1dc99d472849c6e833c60d3a774b7d77a3a0d90a9805b9fc8f157847a50`。
+- MPP SHA-256：`bed81d9f3fd6a836fed3ca13e0c3255dd4181040a3720dcf85a33b13a8d2a011`。构建信息中的源码覆盖补丁和翻译哈希均与本次源码相符。
+- 原始完整 APKM，堆 `4096 MB`：通过同一源码的 `patch-twitter.sh` 成功应用 **47/47** 补丁，包含 `NewX: Download all profile media`，签名保存 `.build/native-X.26.10-full.apk`；SHA-256 `28b9d30e4dacfc29b4927adf297249476fa9cd22c8b417a03304510e580c8114`。
+- 原始基础 APK，堆 `512 MB`：同一脚本和 MPP 成功应用 **47/47** 补丁，签名保存 `.build/native-X.26.10-base-512.apk`；SHA-256 `f7139f1d20c03a259d9c429c90506d1c84c7400d6c2da9d2824a167d8b7a56cf`。
+- 最终 DEX：8 个控制器桥接及画廊媒体 getter 全部替换为已解析的原生成员访问，无残留 throw stub；两个原生 child 返回路径绑定宿主；Success 构造器接入过滤前快照和 autoplay gate，copy 接入快照继承；Piko 画廊入口可达。旧 API Session/Downloader 类不存在。
+- 直接检查生产控制流：成功原生结束先返回 DONE；无新增计数达到 3 才返回 STOPPED；Session 设置 `protectedStop` 后推进分类，最终提示 `pagination_stopped`，正常结束提示 `completed`；每阶段刷新次数上限为 3。
+
+离线命令使用当前构建的 `patches/build/libs/patches-X.26.10.mpp`，环境设置 `MORPHE_CLI_JAR` 指向 `morphe-desktop-1.11.0-all.jar`、`PIKO_PATCH_OUTPUT` 指向上述测试文件，分别执行 `PATCHER_MAX_HEAP_MB=4096 ./patch-twitter.sh <原始完整APKM>` 与 `PATCHER_MAX_HEAP_MB=512 ./patch-twitter.sh <原始基础APK>`。两个命令均退出 0；没有使用安装参数。
