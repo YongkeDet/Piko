@@ -16,4 +16,20 @@
     <string name="piko_newx_download_picker_choose_quality">Choose quality</string>
     <string name="piko_newx_inline_download_author_subfolders_title">Save in author folders</string>
     <string name="piko_newx_inline_download_author_subfolders_summary">Save images, videos and GIFs in an @username subfolder of the selected download folder. Unidentified authors use unknown_user.</string>
+    <string name="piko_newx_profile_download_title">Download all photos and videos</string>
+    <string name="piko_newx_profile_download_description">Download all accessible media from @%1$s. Photos use original size; videos use the highest available quality and your configured folders.</string>
+    <string name="piko_newx_profile_download_all">All photos and videos</string>
+    <string name="piko_newx_profile_download_images">Photos only</string>
+    <string name="piko_newx_profile_download_videos">Videos only</string>
+    <string name="piko_newx_profile_download_unavailable">Refresh the profile, then try again.</string>
+    <string name="piko_newx_profile_download_cancel">Cancel download</string>
+    <string name="piko_newx_profile_download_close">Close</string>
+    <string name="piko_newx_profile_download_cancelled">Download cancelled. Saved files are kept.</string>
+    <string name="piko_newx_profile_download_finished">All accessible media processed.</string>
+    <string name="piko_newx_profile_download_working">Downloading: %1$d pages, %2$d media found</string>
+    <string name="piko_newx_profile_download_progress">Saved %1$d · Skipped %2$d · Failed %3$d · Unavailable %4$d</string>
+    <string name="piko_newx_profile_download_folder_required">Choose a download folder, then start again.</string>
+    <string name="piko_newx_profile_download_rate_limit">X rate limit reached. Saved files are kept; try again later.</string>
+    <string name="piko_newx_profile_download_failed">Could not finish reading this profile. Saved files are kept; try again later.</string>
+    <string name="piko_newx_profile_download_account_changed">Account changed. Download stopped.</string>
 </resources>

@@ -1,0 +1,965 @@
+--- a/extensions/newx/build.gradle.kts
++++ b/extensions/newx/build.gradle.kts
+@@ -25,6 +25,8 @@
+     compileOnly(libs.morphe.extensions.library)
+     compileOnly(libs.annotation)
+     compileOnly(libs.appcompat)
++    // X supplies OkHttp. Package neither another client nor its Okio dependency.
++    compileOnly("com.squareup.okhttp3:okhttp:4.12.0")
+     // Runtime copy is packed once in the shared extension, relocated away from X's Media3.
+     compileOnly(project(path = ":extensions:shared:media3", configuration = "shadowedMedia3"))
+ 
+--- a/extensions/proguard-rules.pro
++++ b/extensions/proguard-rules.pro
+@@ -17,3 +17,4 @@
+ -dontwarn javax.annotation.**
+ -dontwarn kotlin.annotations.jvm.**
+ -dontwarn org.checkerframework.**
++-dontwarn okhttp3.**
+--- a/patch-twitter.sh
++++ b/patch-twitter.sh
+@@ -77,6 +77,7 @@
+   -e "NewX: Custom font" \
+   -e "NewX: Custom sharing domain" \
+   -e "NewX: Inline download button" \
++  -e "NewX: Download all profile media" \
+   -e "NewX: Redirect downloads to chosen folder" \
+   -e "NewX: Theme" \
+   -e "NewX: Set default reply sorting" \
+--- a/extensions/newx/src/main/java/app/morphe/extension/newx/misc/InlineDownloadButton.java
++++ b/extensions/newx/src/main/java/app/morphe/extension/newx/misc/InlineDownloadButton.java
+@@ -1184,7 +1184,16 @@
+             ConflictPolicy policy,
+             boolean explicitResolution
+     ) {
+-        if (!NewXUtils.isHttpUrl(download.url)) return EnqueueState.FAILED;
++        return enqueueDownloadResult(context, download, postContext, username, index, mediaCount,
++                policy, explicitResolution).state();
++    }
++
++    /** The profile worker retains handles for bounded queueing and batch-only cancellation. */
++    static synchronized EnqueueResult enqueueDownloadResult(
++            Context context, DownloadItem download, DownloadFileName.PostContext postContext,
++            String username, int index, int mediaCount, ConflictPolicy policy, boolean explicitResolution
++    ) {
++        if (!NewXUtils.isHttpUrl(download.url)) return EnqueueResult.failed(new IllegalArgumentException("Invalid media URL"));
+ 
+         final NewXDownloadFolders.MediaKind kind;
+         try {
+@@ -1194,7 +1203,7 @@
+                     () -> "Unsupported NewX download media type: " + download.mimeType,
+                     exception
+             );
+-            return EnqueueState.FAILED;
++            return EnqueueResult.failed(exception);
+         }
+ 
+         String template = DownloadSettings.filenameTemplate();
+@@ -1216,7 +1225,7 @@
+ 
+         DownloadEngine engine = NewXDownloader.get();
+         if (engine == null) {
+-            return EnqueueState.FAILED;
++            return EnqueueResult.failed(new IllegalStateException("Download engine unavailable"));
+         }
+ 
+         final Uri destinationTree = NewXDownloadFolders.treeUri(kind);
+@@ -1238,7 +1247,7 @@
+             );
+         } catch (IllegalArgumentException exception) {
+             NewXLogger.printException(() -> "Invalid NewX download request: " + resolvedFileName, exception);
+-            return EnqueueState.FAILED;
++            return EnqueueResult.failed(exception);
+         }
+ 
+         final EnqueueResult result;
+@@ -1248,7 +1257,7 @@
+         if (result.state() == EnqueueState.DESTINATION_LOST) {
+             NewXDownloadFolders.invalidate(kind);
+         }
+-        return result.state();
++        return result;
+     }
+ 
+     static String withResolutionSuffix(String fileName, String resolution) {
+--- /dev/null
++++ b/extensions/newx/src/main/java/app/morphe/extension/newx/misc/ProfileMediaPage.java
+@@ -0,0 +1,157 @@
++package app.morphe.extension.newx.misc;
++
++import org.json.JSONArray;
++import org.json.JSONException;
++import org.json.JSONObject;
++
++import java.net.URI;
++import java.util.ArrayList;
++import java.util.Iterator;
++import java.util.List;
++
++/** Parses the native profile media query, including modules and response objects. */
++final class ProfileMediaPage {
++    final List<Item> items = new ArrayList<>();
++    String cursor;
++    int unavailable;
++    private boolean terminated;
++
++    static final class Item {
++        final String key, postId, handle, name, timestamp, url, extension, mimeType, resolution;
++        final int index, count;
++
++        Item(String key, String postId, String handle, String name, String timestamp,
++             String url, String extension, String mimeType, String resolution, int index, int count) {
++            this.key = key;
++            this.postId = postId;
++            this.handle = handle;
++            this.name = name;
++            this.timestamp = timestamp;
++            this.url = url;
++            this.extension = extension;
++            this.mimeType = mimeType;
++            this.resolution = resolution;
++            this.index = index;
++            this.count = count;
++        }
++    }
++
++    static ProfileMediaPage parse(String json, String userId, String fallbackHandle) throws JSONException {
++        JSONObject root = new JSONObject(json);
++        JSONArray errors = root.optJSONArray("errors");
++        if (errors != null && errors.length() > 0) throw new JSONException("Profile media query returned errors");
++        JSONObject user = root.getJSONObject("data").getJSONObject("user_result").getJSONObject("result");
++        if (!"User".equals(user.optString("__typename")) || !userId.equals(user.getString("rest_id"))) {
++            throw new JSONException("Profile is unavailable or has changed");
++        }
++        JSONObject timeline = user.getJSONObject("timeline_response").getJSONObject("timeline");
++        // Missing instructions is a schema/permission failure, never a successful empty profile.
++        timeline.getJSONArray("instructions");
++        ProfileMediaPage page = new ProfileMediaPage();
++        page.visit(timeline, userId, fallbackHandle, 0);
++        if (page.terminated) page.cursor = null;
++        return page;
++    }
++
++    private void visit(Object value, String userId, String handle, int depth) throws JSONException {
++        if (depth > 64) throw new JSONException("Profile media response is too deeply nested");
++        if (value instanceof JSONArray array) {
++            for (int i = 0; i < array.length(); i++) visit(array.opt(i), userId, handle, depth + 1);
++        } else if (value instanceof JSONObject object) {
++            String type = object.optString("__typename");
++            if ("TimelineTerminateTimeline".equals(type) && "Bottom".equalsIgnoreCase(object.optString("direction"))) {
++                terminated = true;
++                return;
++            }
++            if ("TimelineTimelineCursor".equals(type) || "TimelineCursor".equals(type)) {
++                String kind = object.optString("cursor_type", object.optString("cursorType"));
++                if ("Bottom".equalsIgnoreCase(kind)) {
++                    String next = object.optString("value");
++                    if (!next.isEmpty()) {
++                        if (cursor != null && !cursor.equals(next)) throw new JSONException("Ambiguous bottom cursor");
++                        cursor = next;
++                    }
++                }
++                return;
++            }
++            if ("Tweet".equals(type)) {
++                post(object, userId, handle);
++                return; // Quoted posts, cards, avatars and repost sources are not profile media.
++            }
++            Iterator<String> keys = object.keys();
++            while (keys.hasNext()) visit(object.opt(keys.next()), userId, handle, depth + 1);
++        }
++    }
++
++    private void post(JSONObject post, String userId, String fallbackHandle) throws JSONException {
++        String postId = post.optString("rest_id");
++        if (!postId.matches("[0-9]+")) return;
++        JSONObject author = object(object(object(post, "core"), "user_results"), "result");
++        if (author.has("rest_id") && !userId.equals(author.optString("rest_id"))) return;
++        JSONObject core = object(author, "core");
++        String handle = core.optString("screen_name", fallbackHandle);
++        String name = core.optString("name", handle);
++        String timestamp = object(post, "details").optString("created_at_ms");
++        JSONArray media = post.optJSONArray("media_entities");
++        if (media == null) return;
++        for (int i = 0; i < media.length(); i++) {
++            JSONObject entity = media.optJSONObject(i);
++            if (entity == null) continue;
++            JSONObject result = object(object(entity, "media_results"), "result");
++            JSONObject info = object(result, "media_info");
++            String type = info.optString("__typename");
++            String url = "", extension = "", mime = "", resolution = null;
++            if ("ApiImage".equals(type)) {
++                url = info.optString("original_img_url");
++                extension = imageExtension(url);
++                mime = "png".equals(extension) ? "image/png" : "webp".equals(extension) ? "image/webp" : "image/jpeg";
++                int width = info.optInt("original_img_width"), height = info.optInt("original_img_height");
++                if (width > 0 && height > 0) resolution = width + "x" + height;
++            } else if ("ApiVideo".equals(type) || "ApiGif".equals(type)) {
++                JSONArray variants = info.optJSONArray("variants");
++                long best = -1;
++                if (variants != null) for (int j = 0; j < variants.length(); j++) {
++                    JSONObject variant = variants.optJSONObject(j);
++                    if (variant == null || !"video/mp4".equals(variant.optString("content_type"))) continue;
++                    long bitrate = variant.optLong("bit_rate", 0);
++                    if (bitrate > best && mediaUrl(variant.optString("url"))) {
++                        best = bitrate;
++                        url = variant.optString("url");
++                    }
++                }
++                extension = "mp4";
++                mime = "video/mp4";
++            }
++            if (!mediaUrl(url)) {
++                unavailable++;
++                continue;
++            }
++            String mediaId = result.optString("media_id", result.optString("id", entity.optString("id_str")));
++            String key = mediaId.isEmpty() ? postId + ":" + i : mediaId;
++            items.add(new Item(key, postId, handle, name, timestamp, url, extension, mime, resolution, i, media.length()));
++        }
++    }
++
++    static boolean mediaUrl(String value) {
++        try {
++            URI uri = URI.create(value);
++            String host = uri.getHost();
++            return "https".equalsIgnoreCase(uri.getScheme()) && host != null
++                    && (host.equals("twimg.com") || host.endsWith(".twimg.com"));
++        } catch (IllegalArgumentException exception) {
++            return false;
++        }
++    }
++
++    private static String imageExtension(String url) {
++        String lower = url.toLowerCase(java.util.Locale.ROOT);
++        if (lower.contains("format=png") || lower.matches(".*\\.png(?:[?:].*)?")) return "png";
++        if (lower.contains("format=webp") || lower.matches(".*\\.webp(?:[?:].*)?")) return "webp";
++        return "jpg";
++    }
++
++    private static JSONObject object(JSONObject value, String key) {
++        JSONObject child = value.optJSONObject(key);
++        return child == null ? new JSONObject() : child;
++    }
++}
+--- /dev/null
++++ b/extensions/newx/src/main/java/app/morphe/extension/newx/misc/ProfileMediaSession.java
+@@ -0,0 +1,84 @@
++package app.morphe.extension.newx.misc;
++
++import java.io.IOException;
++import java.util.concurrent.TimeUnit;
++
++import okhttp3.Call;
++import okhttp3.HttpUrl;
++import okhttp3.OkHttpClient;
++import okhttp3.Request;
++import okhttp3.Response;
++
++/** Reuses the host's account client and native query composer; never stores credentials on disk. */
++public final class ProfileMediaSession {
++    private static volatile Object composer;
++    private static volatile ProfileMediaSession current;
++    private final OkHttpClient client;
++    private final Request template;
++    private final Object requestComposer;
++    private volatile Call call;
++
++    private ProfileMediaSession(OkHttpClient client, Request template, Object composer) {
++        this.client = client;
++        this.template = template;
++        this.requestComposer = composer;
++    }
++
++    public static void captureComposer(Object value) {
++        composer = value;
++    }
++
++    public static void captureClient(OkHttpClient client, Request request) {
++        if (request.tag(ProfileMediaSession.class) != null || composer == null) return;
++        HttpUrl url = request.url();
++        if (!"https".equals(url.scheme()) || !"api.x.com".equals(url.host())
++                || !url.encodedPath().startsWith("/graphql/")) return;
++        current = new ProfileMediaSession(client, request, composer);
++    }
++
++    static ProfileMediaSession snapshot() {
++        ProfileMediaSession value = current;
++        return value == null ? null : new ProfileMediaSession(value.client, value.template, value.requestComposer);
++    }
++
++    boolean isCurrent() {
++        ProfileMediaSession value = current;
++        return value != null && value.client == client;
++    }
++
++    String page(String userId, String cursor) throws IOException {
++        if (!isCurrent()) throw new IOException("Account changed");
++        String url = mediaUrl(requestComposer, userId, cursor);
++        HttpUrl parsed = HttpUrl.parse(url);
++        if (parsed == null || !"https".equals(parsed.scheme()) || !"api.x.com".equals(parsed.host())
++                || !parsed.encodedPath().endsWith("/UserProfileMediaTimelineQuery")) {
++            throw new IOException("Invalid native profile media request");
++        }
++        // Let the account client's authentication interceptors sign the new URL.
++        Request request = template.newBuilder().url(parsed).get()
++                .removeHeader("Authorization")
++                .removeHeader("Content-Length").removeHeader("Content-Type")
++                .removeHeader("If-None-Match").removeHeader("If-Modified-Since")
++                .header("Accept", "application/json")
++                .tag(ProfileMediaSession.class, this).build();
++        Call created = client.newBuilder().callTimeout(45, TimeUnit.SECONDS).build().newCall(request);
++        call = created;
++        try (Response response = created.execute()) {
++            if (response.code() == 429) throw new IOException("rate-limit");
++            if (!response.isSuccessful() || response.body() == null) throw new IOException("Profile media HTTP " + response.code());
++            return response.body().string();
++        } finally {
++            call = null;
++        }
++    }
++
++    void cancel() {
++        Call active = call;
++        if (active != null) active.cancel();
++    }
++
++    // Replaced at patch time with direct calls into this APK's generated query/composer.
++    private static String mediaUrl(Object composer, String userId, String cursor) {
++        throw new IllegalStateException("Unpatched profile media query bridge");
++    }
++}
+--- /dev/null
++++ b/extensions/newx/src/main/java/app/morphe/extension/newx/misc/ProfileMediaDownloader.java
+@@ -0,0 +1,271 @@
++package app.morphe.extension.newx.misc;
++
++import android.app.Activity;
++import android.content.Context;
++import android.view.View;
++import android.widget.LinearLayout;
++import android.widget.TextView;
++
++import java.lang.ref.WeakReference;
++import java.time.Instant;
++import java.time.ZoneOffset;
++import java.time.format.DateTimeFormatter;
++import java.util.ArrayList;
++import java.util.HashSet;
++import java.util.Iterator;
++import java.util.List;
++import java.util.Set;
++import java.util.concurrent.ExecutorService;
++import java.util.concurrent.Executors;
++
++import app.morphe.extension.crimera.downloader.DownloadHandle;
++import app.morphe.extension.crimera.downloader.EnqueueResult;
++import app.morphe.extension.crimera.downloader.model.ConflictPolicy;
++import app.morphe.extension.crimera.settings.StringRef;
++import app.morphe.extension.crimera.ui.ButtonView;
++import app.morphe.extension.newx.ui.BottomSheetView;
++import app.morphe.extension.newx.ui.IconView;
++import app.morphe.extension.newx.ui.ListItem;
++import app.morphe.extension.newx.ui.Theme;
++import app.morphe.extension.newx.utils.NewXUtils;
++
++/** Native profile menu entry and a bounded, cancelable download job. */
++public final class ProfileMediaDownloader {
++    private static final List<MenuEntry> MENU_ENTRIES = new ArrayList<>();
++    private static final ExecutorService WORKER = Executors.newSingleThreadExecutor(r -> {
++        Thread thread = new Thread(r, "profile-media-download");
++        thread.setDaemon(true);
++        return thread;
++    });
++    private static volatile Job active;
++
++    private ProfileMediaDownloader() {}
++
++    private static String text(String suffix, Object... args) {
++        String value = StringRef.str("piko_newx_profile_download_" + suffix);
++        return args.length == 0 ? value : String.format(java.util.Locale.getDefault(), value, args);
++    }
++
++    public static List<?> addMenuItem(List<?> original, Object user) {
++        if (original == null || original.isEmpty() || user == null) return original;
++        String id = profileId(user), handle = profileHandle(user);
++        if (id == null || !id.matches("[0-9]+") || handle == null || !handle.matches("[A-Za-z0-9_]+")) return original;
++        Object item = createMenuItem(original.get(0), text("title"));
++        synchronized (MENU_ENTRIES) {
++            MENU_ENTRIES.removeIf(entry -> entry.item.get() == null);
++            MENU_ENTRIES.add(new MenuEntry(new WeakReference<>(item), id, handle));
++        }
++        List<Object> result = new ArrayList<>(original);
++        result.add(item);
++        return result;
++    }
++
++    public static boolean handleMenuItem(Object item) {
++        MenuEntry match = null;
++        synchronized (MENU_ENTRIES) {
++            for (MenuEntry entry : MENU_ENTRIES) if (entry.item.get() == item) { match = entry; break; }
++        }
++        if (match == null) return false;
++        MenuEntry target = match;
++        // Native menu dismissal finishes before showing the download sheet.
++        NewXUtils.runOnUiThread(() -> show(target));
++        return true;
++    }
++
++    private static void show(MenuEntry target) {
++        Activity activity = InlineDownloadButton.currentActivity();
++        if (activity == null) return;
++        Job job = active;
++        if (job != null && !job.done) { showProgress(activity, job); return; }
++        BottomSheetView sheet = new BottomSheetView(activity)
++                .setTitle(text("title")).setSubtitle(text("description", target.handle));
++        LinearLayout body = new LinearLayout(activity);
++        body.setOrientation(LinearLayout.VERTICAL);
++        String[] labels = {"all", "images", "videos"};
++        IconView.IconType[] icons = {IconView.IconType.DOWNLOAD, IconView.IconType.IMAGE, IconView.IconType.VIDEO};
++        for (int i = 0; i < labels.length; i++) {
++            final int kind = i;
++            ListItem row = new ListItem(activity);
++            row.setTitle(text(labels[i]));
++            row.setLeadingIcon(icons[i], Theme.primaryText(activity), null);
++            row.setOnClickListener(v -> {
++                sheet.dismiss();
++                start(activity, target, kind);
++            });
++            body.addView(row);
++        }
++        sheet.setScrollableBodyView(body).show();
++    }
++
++    private static void start(Activity activity, MenuEntry target, int kind) {
++        ProfileMediaSession session = ProfileMediaSession.snapshot();
++        if (session == null) {
++            NewXInAppNotification.show(text("unavailable"));
++            return;
++        }
++        Job job;
++        synchronized (ProfileMediaDownloader.class) {
++            if (active != null && !active.done) { showProgress(activity, active); return; }
++            job = new Job(activity.getApplicationContext(), target, kind, session);
++            active = job;
++        }
++        showProgress(activity, job);
++        WORKER.execute(job);
++    }
++
++    private static void showProgress(Activity activity, Job job) {
++        BottomSheetView sheet = new BottomSheetView(activity)
++                .setTitle(text("title")).setSubtitle("@" + job.target.handle);
++        LinearLayout body = new LinearLayout(activity);
++        body.setOrientation(LinearLayout.VERTICAL);
++        int padding = Theme.dpToPx(activity, 20);
++        body.setPadding(padding, 0, padding, padding);
++        TextView status = new TextView(activity);
++        status.setTextSize(15);
++        status.setTextColor(Theme.primaryText(activity));
++        body.addView(status);
++        sheet.setBodyView(body);
++        ButtonView cancel = new ButtonView(activity, ButtonView.ButtonStyle.TONAL, text("cancel"));
++        cancel.setOnClickListener(v -> job.cancel());
++        sheet.addButton(cancel);
++        ButtonView close = new ButtonView(activity, ButtonView.ButtonStyle.FILLED, text("close"));
++        close.setOnClickListener(v -> sheet.dismiss());
++        sheet.addButton(close);
++        sheet.getDialog().setOnDismissListener(v -> {
++            job.update = null;
++        });
++        job.update = () -> {
++            if (activity.isFinishing() || activity.isDestroyed()) return;
++            status.setText(job.message());
++            cancel.setVisibility(job.done ? View.GONE : View.VISIBLE);
++        };
++        job.update.run();
++        sheet.show();
++    }
++
++    private static final class MenuEntry {
++        final WeakReference<Object> item;
++        final String id, handle;
++        MenuEntry(WeakReference<Object> item, String id, String handle) {
++            this.item = item; this.id = id; this.handle = handle;
++        }
++    }
++
++    private static final class Job implements Runnable {
++        final Context context;
++        final MenuEntry target;
++        final int kind;
++        final ProfileMediaSession session;
++        final List<DownloadHandle> pending = new ArrayList<>();
++        final Set<String> seenMedia = new HashSet<>(), seenCursors = new HashSet<>();
++        volatile boolean cancelled, done;
++        volatile int pages, found, saved, skipped, failed, unavailable;
++        volatile String problem;
++        volatile Runnable update;
++
++        Job(Context context, MenuEntry target, int kind, ProfileMediaSession session) {
++            this.context = context; this.target = target; this.kind = kind; this.session = session;
++        }
++
++        void cancel() {
++            cancelled = true;
++            session.cancel();
++            refresh();
++        }
++
++        String message() {
++            String state = cancelled ? text("cancelled") : problem != null ? problem
++                    : done ? text("finished") : text("working", pages, found);
++            return state + "\n\n" + text("progress", saved, skipped, failed, unavailable);
++        }
++
++        void refresh() {
++            NewXUtils.runOnUiThread(() -> { Runnable action = update; if (action != null) action.run(); });
++        }
++
++        @Override public void run() {
++            try {
++                // SAF grants are checked off the UI thread, before fetching/queueing anything.
++                for (NewXDownloadFolders.MediaKind mediaKind : NewXDownloadFolders.MediaKind.values()) {
++                    if (kind == 1 && mediaKind != NewXDownloadFolders.MediaKind.IMAGES
++                            || kind == 2 && mediaKind != NewXDownloadFolders.MediaKind.VIDEOS) continue;
++                    if (NewXDownloadFolders.destinationState(context, mediaKind) != NewXDownloadFolders.DestinationState.LIVE) {
++                        problem = text("folder_required");
++                        NewXUtils.runOnUiThread(() -> NewXDownloadFolders.choose(context, mediaKind));
++                        return;
++                    }
++                }
++                ConflictPolicy policy = NewXDownloadFolders.conflictPolicy();
++                String cursor = null;
++                do {
++                    checkCancelled();
++                    ProfileMediaPage page = ProfileMediaPage.parse(session.page(target.id, cursor), target.id, target.handle);
++                    pages++;
++                    unavailable += page.unavailable;
++                    for (ProfileMediaPage.Item item : page.items) {
++                        checkCancelled();
++                        boolean image = item.mimeType.startsWith("image/");
++                        if (kind == 1 && !image || kind == 2 && image || !seenMedia.add(item.key)) continue;
++                        found++;
++                        while (pending.size() >= 4) { reap(); checkCancelled(); if (pending.size() >= 4) Thread.sleep(200); }
++                        String timestamp = item.timestamp;
++                        try { timestamp = DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmmss").withZone(ZoneOffset.UTC)
++                                .format(Instant.ofEpochMilli(Long.parseLong(timestamp))); }
++                        catch (RuntimeException ignored) { }
++                        DownloadFileName.PostContext post = new DownloadFileName.PostContext(item.postId,
++                                item.handle, item.name, timestamp, item.postId, item.handle, item.name);
++                        InlineDownloadButton.DownloadItem download = new InlineDownloadButton.DownloadItem(
++                                item.url, item.extension, item.mimeType, "", null, null,
++                                item.resolution, null, null, null);
++                        EnqueueResult result = InlineDownloadButton.enqueueDownloadResult(context, download, post,
++                                target.handle, item.index, item.count, policy, false);
++                        switch (result.state()) {
++                            case QUEUED -> pending.add(result.handle());
++                            case SKIPPED -> skipped++;
++                            case FAILED -> failed++;
++                            case DESTINATION_LOST -> { problem = text("folder_required"); throw new InterruptedException(); }
++                        }
++                        reap();
++                        refresh();
++                    }
++                    cursor = page.cursor;
++                    if (cursor != null && !seenCursors.add(cursor)) throw new IllegalStateException("Repeated profile media cursor");
++                    // Avoid a burst of page requests on profiles whose files are already saved.
++                    if (cursor != null) Thread.sleep(1000);
++                } while (cursor != null);
++                while (!pending.isEmpty()) { checkCancelled(); reap(); if (!pending.isEmpty()) Thread.sleep(200); }
++            } catch (InterruptedException ignored) {
++                // User cancellation, account change or lost folder: cancel only this job's files.
++            } catch (Exception exception) {
++                if (!cancelled) problem = text("rate-limit".equals(exception.getMessage()) ? "rate_limit" : "failed");
++            } finally {
++                for (DownloadHandle handle : pending) handle.cancel();
++                pending.clear();
++                done = true;
++                refresh();
++                NewXUtils.runOnUiThread(() -> NewXInAppNotification.showForUser(message(), target.handle));
++            }
++        }
++
++        private void checkCancelled() throws InterruptedException {
++            if (cancelled) throw new InterruptedException();
++            if (!session.isCurrent()) { problem = text("account_changed"); throw new InterruptedException(); }
++        }
++
++        private void reap() {
++            Iterator<DownloadHandle> iterator = pending.iterator();
++            while (iterator.hasNext()) {
++                DownloadHandle.State state = iterator.next().state();
++                if (state == DownloadHandle.State.COMPLETED) saved++;
++                else if (state == DownloadHandle.State.FAILED) failed++;
++                else if (state != DownloadHandle.State.CANCELLED) continue;
++                iterator.remove();
++            }
++        }
++    }
++
++    // Every obfuscated member is resolved and emitted by the patch, never runtime reflection.
++    private static Object createMenuItem(Object seed, String title) { throw new IllegalStateException("Unpatched profile menu bridge"); }
++    private static String profileId(Object user) { throw new IllegalStateException("Unpatched profile ID bridge"); }
++    private static String profileHandle(Object user) { throw new IllegalStateException("Unpatched profile handle bridge"); }
++}
+--- /dev/null
++++ b/extensions/newx/src/test/java/app/morphe/extension/newx/misc/ProfileMediaPageTest.java
+@@ -0,0 +1,83 @@
++package app.morphe.extension.newx.misc;
++
++import static org.junit.Assert.*;
++
++import org.json.JSONArray;
++import org.json.JSONException;
++import org.json.JSONObject;
++import org.junit.Test;
++
++/** Prevents empty-success on native schema drift and accidental downloads of quoted media. */
++public class ProfileMediaPageTest {
++    private static JSONObject response(JSONArray instructions) throws JSONException {
++        return new JSONObject().put("data", new JSONObject().put("user_result", new JSONObject().put("result",
++                new JSONObject().put("__typename", "User").put("rest_id", "42")
++                        .put("timeline_response", new JSONObject().put("timeline", new JSONObject().put("instructions", instructions))))));
++    }
++
++    private static JSONObject image(String id, String url) throws JSONException {
++        return new JSONObject().put("id_str", id).put("media_results", new JSONObject().put("result",
++                new JSONObject().put("media_id", id).put("media_info", new JSONObject()
++                        .put("__typename", "ApiImage").put("original_img_url", url)
++                        .put("original_img_width", 4000).put("original_img_height", 3000))));
++    }
++
++    private static JSONObject post(JSONArray media) throws JSONException {
++        return new JSONObject().put("__typename", "Tweet").put("rest_id", "100")
++                .put("media_entities", media).put("details", new JSONObject().put("created_at_ms", 1700000000000L))
++                .put("core", new JSONObject().put("user_results", new JSONObject().put("result",
++                        new JSONObject().put("rest_id", "42").put("core", new JSONObject()
++                                .put("screen_name", "jack").put("name", "Jack")))));
++    }
++
++    @Test public void nativeModulesPreserveAllAttachmentsAndHighestMp4WithoutQuotedMedia() throws Exception {
++        JSONObject video = new JSONObject().put("id_str", "b").put("media_results", new JSONObject().put("result",
++                new JSONObject().put("media_id", "b").put("media_info", new JSONObject().put("__typename", "ApiVideo")
++                        .put("variants", new JSONArray()
++                                .put(new JSONObject().put("content_type", "application/x-mpegURL").put("url", "https://video.twimg.com/a.m3u8"))
++                                .put(new JSONObject().put("content_type", "video/mp4").put("bit_rate", 100).put("url", "https://video.twimg.com/low.mp4"))
++                                .put(new JSONObject().put("content_type", "video/mp4").put("bit_rate", 300).put("url", "https://video.twimg.com/high.mp4"))))));
++        JSONObject tweet = post(new JSONArray().put(image("a", "https://pbs.twimg.com/media/a?format=png&name=orig")).put(video));
++        tweet.put("quoted_tweet_results", new JSONObject().put("result", post(new JSONArray().put(image("quoted", "https://pbs.twimg.com/media/quoted.jpg")))));
++        JSONObject cursor = new JSONObject().put("__typename", "TimelineTimelineCursor").put("cursor_type", "Bottom").put("value", "page2");
++        String json = response(new JSONArray().put(new JSONObject().put("__typename", "TimelineAddEntries").put("entries",
++                new JSONArray().put(new JSONObject().put("content", new JSONObject().put("items", new JSONArray().put(tweet)))).put(cursor)))).toString();
++        ProfileMediaPage page = ProfileMediaPage.parse(json, "42", "fallback");
++        assertEquals(2, page.items.size());
++        assertEquals("page2", page.cursor);
++        assertEquals("png", page.items.get(0).extension);
++        assertEquals("4000x3000", page.items.get(0).resolution);
++        assertEquals("https://video.twimg.com/high.mp4", page.items.get(1).url);
++        assertEquals("jack", page.items.get(1).handle);
++        assertEquals(1, page.items.get(1).index);
++        assertEquals(2, page.items.get(1).count);
++        assertEquals(0, page.unavailable);
++    }
++
++    @Test public void emptyIntermediatePageRetainsCursorAndExplicitBottomTerminationWins() throws Exception {
++        JSONArray instructions = new JSONArray().put(new JSONObject().put("__typename", "TimelineTimelineCursor")
++                .put("cursorType", "Bottom").put("value", "next"));
++        ProfileMediaPage page = ProfileMediaPage.parse(response(instructions).toString(), "42", "jack");
++        assertEquals("next", page.cursor);
++        assertTrue(page.items.isEmpty());
++        instructions.put(new JSONObject().put("__typename", "TimelineTerminateTimeline").put("direction", "Bottom"));
++        assertNull(ProfileMediaPage.parse(response(instructions).toString(), "42", "jack").cursor);
++    }
++
++    @Test public void unavailableFilesAreCountedAndNonMediaUrlsAreNeverDownloaded() throws Exception {
++        JSONObject tweet = post(new JSONArray().put(image("bad", "https://pbs.twimg.com.attacker.invalid/private"))
++                .put(new JSONObject().put("media_results", new JSONObject().put("result", JSONObject.NULL))));
++        ProfileMediaPage page = ProfileMediaPage.parse(response(new JSONArray().put(tweet)).toString(), "42", "jack");
++        assertTrue(page.items.isEmpty());
++        assertEquals(2, page.unavailable);
++    }
++
++    @Test public void errorsMissingTimelineAndWrongProfileFailInsteadOfReportingFinished() throws Exception {
++        JSONObject good = response(new JSONArray());
++        assertTrue(ProfileMediaPage.parse(good.toString(), "42", "jack").items.isEmpty());
++        assertThrows(JSONException.class, () -> ProfileMediaPage.parse(good.toString(), "99", "jack"));
++        JSONObject partial = response(new JSONArray()).put("errors", new JSONArray().put(new JSONObject().put("code", 88)));
++        assertThrows(JSONException.class, () -> ProfileMediaPage.parse(partial.toString(), "42", "jack"));
++        assertThrows(JSONException.class, () -> ProfileMediaPage.parse("{\"data\":{}}", "42", "jack"));
++    }
++}
+--- /dev/null
++++ b/patches/src/main/kotlin/app/crimera/patches/newx/misc/profiledownload/ProfileMediaDownloadPatch.kt
+@@ -0,0 +1,271 @@
++package app.crimera.patches.newx.misc.profiledownload
++
++import app.crimera.bytecode.Block
++import app.crimera.bytecode.Target
++import app.crimera.bytecode.insertHook
++import app.crimera.bytecode.methodReference
++import app.crimera.patches.common.destinationRegisterOrNull
++import app.crimera.patches.common.isAssignableTo
++import app.crimera.patches.common.requireExactlyOne
++import app.crimera.patches.newx.misc.inlineactions.newXInlineDownloadButtonPatch
++import app.crimera.patches.newx.utils.Constants.COMPATIBILITY_NEW_X
++import app.crimera.patches.utils.scopedMatchAll
++import app.morphe.patcher.Fingerprint
++import app.morphe.patcher.patch.BytecodePatchContext
++import app.morphe.patcher.patch.PatchException
++import app.morphe.patcher.patch.bytecodePatch
++import app.morphe.patcher.string
++import app.morphe.patcher.util.proxy.mutableTypes.MutableClass
++import app.morphe.patcher.util.proxy.mutableTypes.MutableMethod
++import app.morphe.patches.all.misc.resources.ResourceType
++import app.morphe.patches.all.misc.resources.getResourceId
++import app.morphe.util.cloneMutable
++import app.morphe.util.getReference
++import app.morphe.util.p0Register
++import com.android.tools.smali.dexlib2.AccessFlags
++import com.android.tools.smali.dexlib2.Opcode
++import com.android.tools.smali.dexlib2.iface.ClassDef
++import com.android.tools.smali.dexlib2.iface.Method
++import com.android.tools.smali.dexlib2.iface.instruction.Instruction
++import com.android.tools.smali.dexlib2.iface.instruction.OneRegisterInstruction
++import com.android.tools.smali.dexlib2.iface.instruction.TwoRegisterInstruction
++import com.android.tools.smali.dexlib2.iface.reference.FieldReference
++import com.android.tools.smali.dexlib2.iface.reference.MethodReference
++import com.android.tools.smali.dexlib2.iface.reference.StringReference
++
++private const val OBJECT = "Ljava/lang/Object;"
++private const val STRING = "Ljava/lang/String;"
++private const val LIST = "Ljava/util/List;"
++private const val EXTENSION = "Lapp/morphe/extension/newx/misc/ProfileMediaDownloader;"
++private const val SESSION = "Lapp/morphe/extension/newx/misc/ProfileMediaSession;"
++private const val PROFILE_SCOPE = "Lcom/x/profile/header/"
++
++/** The list, item, callback and query contracts are resolved before any host mutation. */
++@Suppress("unused")
++val newXProfileMediaDownloadPatch = bytecodePatch(
++    name = "NewX: Download all profile media",
++    description = "Download all accessible photos and videos from a profile using its native menu.",
++) {
++    compatibleWith(COMPATIBILITY_NEW_X)
++    dependsOn(newXInlineDownloadButtonPatch)
++
++    execute {
++        val itemClass = markedClass("ProfileMenuItem(text=")
++        val userClass = markedClass("ProfileUser(id=")
++        val iconClass = markedClass("Icon(drawableRes=")
++        val itemCtor = requireExactlyOne("profile menu item constructor", itemClass.methods.filter {
++            it.name == "<init>" && it.parameterTypes.size == 4 &&
++                it.parameterTypes[0].toString() == STRING && it.parameterTypes[1].toString() == iconClass.type
++        })
++        val iconCtor = requireExactlyOne("profile download icon constructor", iconClass.methods.filter {
++            it.name == "<init>" && it.parameterTypes.map(CharSequence::toString) == listOf("I")
++        })
++        val eventField = requireExactlyOne("profile menu click event", itemClass.fields.filter {
++            !AccessFlags.STATIC.isSet(it.accessFlags) && it.type.toString() == itemCtor.parameterTypes[2].toString()
++        }).publicField()
++
++        val builder = requireExactlyOne("profile overflow list builder", Fingerprint(
++            custom = { method, classDef ->
++                classDef.type.startsWith(PROFILE_SCOPE) &&
++                    method.parameterTypes.map(CharSequence::toString) == listOf(userClass.type) &&
++                    method.code().any { it.getReference<MethodReference>()?.toString() == itemCtor.toString() } &&
++                    method.code().any { it.isListOfNotNull() }
++            },
++        ).scopedMatchAll()).method
++        val listCall = requireExactlyOne("profile overflow list conversion", builder.code().withIndex().filter {
++            it.value.isListOfNotNull()
++        }).index
++        // This adjacency is the Dalvik invoke/result contract, not a numeric release offset.
++        val result = builder.code().getOrNull(listCall + 1)
++        if (result?.opcode != Opcode.MOVE_RESULT_OBJECT) throw PatchException("Profile menu list result is missing")
++        val listRegister = (result as OneRegisterInstruction).registerA
++        val userRegister = builder.p0Register + if (AccessFlags.STATIC.isSet(builder.accessFlags)) 0 else 1
++        if (builder.code().take(listCall + 2).any { it.destinationRegisterOrNull() == userRegister }) {
++            throw PatchException("Profile menu user parameter is overwritten before the list hook")
++        }
++
++        val callback = requireExactlyOne("profile menu callback", Fingerprint(
++            returnType = OBJECT,
++            custom = { method, classDef ->
++                classDef.type.startsWith(PROFILE_SCOPE) && method.parameterTypes.isEmpty() &&
++                    classDef.interfaces.contains("Lkotlin/jvm/functions/Function0;") &&
++                    method.code().any { it.opcode == Opcode.IGET_OBJECT && it.getReference<FieldReference>()?.toString() == eventField.toString() }
++            },
++        ).scopedMatchAll()).method
++        val unit = requireExactlyOne("profile callback Unit result", callback.code().mapNotNull {
++            it.getReference<FieldReference>()?.takeIf { field -> it.opcode == Opcode.SGET_OBJECT && field.type == "Lkotlin/Unit;" }
++        }.distinctBy(FieldReference::toString))
++        val clicks = callback.code().withIndex().filter {
++            it.value.opcode == Opcode.IGET_OBJECT && it.value.getReference<FieldReference>()?.toString() == eventField.toString()
++        }
++        if (clicks.isEmpty()) throw PatchException("Profile menu callback has no click path")
++        clicks.forEach { (index, instruction) ->
++            val call = callback.code().getOrNull(index + 1)?.getReference<MethodReference>()
++            if (call?.definingClass != "Lkotlin/jvm/functions/Function1;" || call.name != "invoke") {
++                throw PatchException("Profile menu event no longer feeds the native callback")
++            }
++            if (instruction !is TwoRegisterInstruction) throw PatchException("Profile menu item receiver is missing")
++        }
++
++        val composer = requireExactlyOne("native GraphQL request composer", Fingerprint(
++            filters = listOf(string("https://api.x.com/graphql"), string("variables"), string("features")),
++            custom = { method, _ -> method.parameterTypes.size == 1 && method.returnType.startsWith("Lcom/apollographql/apollo/api/http/") },
++        ).scopedMatchAll()).method
++        val queryClass = markedClass("UserProfileMediaTimelineQuery")
++        val queryCtor = requireExactlyOne("native profile media query constructor", queryClass.methods.filter {
++            it.name == "<init>" && it.parameterTypes.map(CharSequence::toString) == listOf(STRING, STRING)
++        })
++        val requestClass = mutableClassDefBy(composer.parameterTypes.single().toString())
++        val operationField = requireExactlyOne("native GraphQL operation field", composer.code().mapNotNull {
++            it.getReference<FieldReference>()?.takeIf { field ->
++                it.opcode == Opcode.IGET_OBJECT && field.definingClass == requestClass.type &&
++                    field.type.startsWith("Lcom/apollographql/apollo/api/") && !field.type.startsWith("Lcom/apollographql/apollo/api/http/")
++            }
++        }.distinctBy(FieldReference::toString))
++        if (!isAssignableTo(queryClass.type, operationField.type)) throw PatchException("Native profile query is not an Apollo operation")
++        val requestCtor = requireExactlyOne("native GraphQL request builder", requestClass.methods.filter {
++            it.name == "<init>" && it.parameterTypes.map(CharSequence::toString) == listOf(operationField.type)
++        })
++        val methodField = requireExactlyOne("native GraphQL HTTP method", requestClass.fields.filter {
++            !AccessFlags.STATIC.isSet(it.accessFlags) && classDefByOrNull(it.type)?.fields?.any { field -> field.name == "Get" && field.type == it.type } == true
++        }).publicField()
++        if (AccessFlags.FINAL.isSet(methodField.accessFlags)) throw PatchException("Native request HTTP method is immutable")
++        val get = requireExactlyOne("native GraphQL GET enum", mutableClassDefBy(methodField.type).fields.filter {
++            it.name == "Get" && it.type == methodField.type && AccessFlags.STATIC.isSet(it.accessFlags)
++        })
++        val build = requireExactlyOne("native GraphQL request finalizer", requestClass.methods.filter { method ->
++            method.parameterTypes.isEmpty() && method.returnType == requestClass.type && method.code().any {
++                it.getReference<MethodReference>()?.let { ref -> ref.definingClass == "Ljava/util/UUID;" && ref.name == "randomUUID" } == true
++            }
++        })
++        val urlField = requireExactlyOne("native GraphQL HTTP URL", mutableClassDefBy(composer.returnType).fields.filter {
++            !AccessFlags.STATIC.isSet(it.accessFlags) && it.type == STRING
++        }).publicField()
++        val clientCall = requireExactlyOne("host OkHttp call factory", mutableClassDefBy("Lokhttp3/OkHttpClient;").methods.filter {
++            it.name == "newCall" && it.parameterTypes.map(CharSequence::toString) == listOf("Lokhttp3/Request;") && it.returnType == "Lokhttp3/Call;"
++        })
++
++        val extension = mutableClassDefBy(EXTENSION)
++        val iconId = getResourceId(ResourceType.DRAWABLE, "ic_vector_arrow_down_circle_stroke")
++        extension.bridge("createMenuItem", 6) { method ->
++            val seed = method.p0Register
++            checkCast(seed, itemClass.type)
++            iget(3, seed, eventField)
++            newInstance(2, iconClass.type)
++            constInt(0, iconId)
++            invokeDirect(iconCtor, 2, 0)
++            newInstance(0, itemClass.type)
++            move(1, seed + 1, STRING)
++            constInt(4, 0) // Native default tint.
++            invokeDirect(itemCtor, 0, 1, 2, 3, 4)
++            returnObject(0)
++        }
++        val userIdField = requireExactlyOne("profile user identifier", userClass.fields.filter {
++            !AccessFlags.STATIC.isSet(it.accessFlags) && classDefByOrNull(it.type)?.fields?.count { field ->
++                !AccessFlags.STATIC.isSet(field.accessFlags) && field.type == "J"
++            } == 1
++        }).publicField()
++        val numericId = requireExactlyOne("profile user numeric ID", mutableClassDefBy(userIdField.type).fields.filter {
++            !AccessFlags.STATIC.isSet(it.accessFlags) && it.type == "J"
++        }).publicField()
++        // The stable screenName marker identifies the read even when R8 folds append calls.
++        val userToString = requireExactlyOne("profile user toString", userClass.methods.filter { it.name == "toString" && it.parameterTypes.isEmpty() })
++        val screenMarker = requireExactlyOne("profile screenName marker", userToString.code().withIndex().filter {
++            it.value.getReference<StringReference>()?.string == ", screenName="
++        })
++        val stringFields = userToString.code().mapNotNull { instruction ->
++            instruction.getReference<FieldReference>()?.takeIf { instruction.opcode == Opcode.IGET_OBJECT && it.definingClass == userClass.type && it.type == STRING }
++        }.distinctBy(FieldReference::toString)
++        // ProfileUser's primary constructor assigns its first String parameter to screenName.
++        val userCtors = userClass.methods.filter { it.name == "<init>" && it.parameterTypes.any { type -> type.toString() == userIdField.type } }
++        val handleFields = userCtors.flatMap { ctor ->
++            val parameters = ctor.parameterTypes.map(CharSequence::toString)
++            val idIndex = parameters.indexOf(userIdField.type)
++            if (parameters.getOrNull(idIndex + 1) != STRING) return@flatMap emptyList()
++            val handleRegister = ctor.p0Register + 1 + parameters.take(idIndex + 1).sumOf { if (it == "J" || it == "D") 2 else 1 }
++            ctor.code().mapNotNull { instruction ->
++                val registers = instruction as? TwoRegisterInstruction ?: return@mapNotNull null
++                instruction.getReference<FieldReference>()?.takeIf {
++                    instruction.opcode == Opcode.IPUT_OBJECT && registers.registerA == handleRegister &&
++                        it.type == STRING && stringFields.any { candidate -> candidate.toString() == it.toString() }
++                }
++            }
++        }.distinctBy(FieldReference::toString)
++        val handleField = requireExactlyOne("profile screenName constructor field", handleFields).publicField()
++        extension.bridge("profileId", 3) { method ->
++            checkCast(method.p0Register, userClass.type)
++            iget(2, method.p0Register, userIdField)
++            iget(0, 2, numericId)
++            invokeStatic(methodReference("Ljava/lang/Long;->toString(J)Ljava/lang/String;"), 0, 1)
++            moveResult(0, STRING)
++            returnObject(0)
++        }
++        extension.bridge("profileHandle", 1) { method ->
++            checkCast(method.p0Register, userClass.type)
++            iget(0, method.p0Register, handleField)
++            returnObject(0)
++        }
++        mutableClassDefBy(SESSION).bridge("mediaUrl", 4) { method ->
++            val owner = method.p0Register
++            checkCast(owner, composer.definingClass)
++            newInstance(0, queryClass.type)
++            invokeDirect(queryCtor, 0, owner + 1, owner + 2)
++            newInstance(1, requestClass.type)
++            invokeDirect(requestCtor, 1, 0)
++            sget(2, get)
++            iput(2, 1, methodField)
++            invokeVirtual(build, 1)
++            moveResult(1, requestClass.type)
++            invokeVirtual(composer, owner, 1)
++            moveResult(0, composer.returnType)
++            iget(0, 0, urlField)
++            returnObject(0)
++        }
++        builder.insertHook(listCall + 2, excludedRegisters = listOf(listRegister, userRegister), relocateBranchTargets = true) {
++            invokeStatic(methodReference("$EXTENSION->addMenuItem($LIST$OBJECT)$LIST"), listRegister, userRegister)
++            moveResult(listRegister, LIST)
++        }
++        clicks.sortedByDescending { it.index }.forEach { (index, instruction) ->
++            val itemRegister = (instruction as TwoRegisterInstruction).registerB
++            callback.insertHook(index, excludedRegisters = listOf(itemRegister), relocateBranchTargets = true) {
++                val resultRegister = scratchRegister()
++                invokeStatic(methodReference("$EXTENSION->handleMenuItem($OBJECT)Z"), itemRegister)
++                moveResult(resultRegister, "Z")
++                ifEqz(resultRegister, Target.Original)
++                sget(resultRegister, unit)
++                returnObject(resultRegister)
++            }
++        }
++        composer.insertHook(0, relocateBranchTargets = false) {
++            invokeStatic(methodReference("$SESSION->captureComposer($OBJECT)V"), composer.p0Register)
++        }
++        clientCall.insertHook(0, relocateBranchTargets = false) {
++            invokeStatic(methodReference("$SESSION->captureClient(Lokhttp3/OkHttpClient;Lokhttp3/Request;)V"), clientCall.p0Register, clientCall.p0Register + 1)
++        }
++    }
++}
++
++context(context: BytecodePatchContext)
++private fun markedClass(marker: String): ClassDef = requireExactlyOne("profile download $marker class", context.classDefByStrings(marker))
++
++private fun Method.code(): List<Instruction> = implementation?.instructions?.toList().orEmpty()
++
++private fun Instruction.isListOfNotNull(): Boolean = getReference<MethodReference>()?.let {
++    it.definingClass == "Lkotlin/collections/CollectionsKt;" && it.name == "listOfNotNull" &&
++        it.parameterTypes.map(CharSequence::toString) == listOf("[Ljava/lang/Object;") && it.returnType == LIST
++} == true
++
++private fun <T : com.android.tools.smali.dexlib2.iface.Field> T.publicField(): T {
++    if (!AccessFlags.PUBLIC.isSet(accessFlags)) throw PatchException("Profile download bridge field is not public: $this")
++    return this
++}
++
++/** Keep bridge parameters separate from the bounded local registers used by the typed emitter. */
++private fun MutableClass.bridge(name: String, locals: Int, body: Block.(MutableMethod) -> Unit) {
++    val stub = requireExactlyOne("profile download $name bridge", methods.filter { it.name == name })
++    val oldLocals = (stub.implementation?.registerCount ?: 0) - stub.parameterTypes.sumOf { if (it == "J" || it == "D") 2 else 1 }
++    val method = stub.cloneMutable(additionalRegisters = maxOf(0, locals - oldLocals))
++    methods.remove(stub)
++    methods.add(method)
++    method.insertHook(0, relocateBranchTargets = false) { body(method) }
++}

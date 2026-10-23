@@ -511,4 +511,20 @@
     <string name="piko_newx_download_picker_choose_quality">选择画质</string>
     <string name="piko_newx_inline_download_author_subfolders_title">按作者分文件夹保存</string>
     <string name="piko_newx_inline_download_author_subfolders_summary">在已选下载目录中，按作者账号创建 @用户名 文件夹，保存图片、视频和 GIF；无法识别作者时保存到 unknown_user。</string>
+    <string name="piko_newx_profile_download_title">下载全部图片和视频</string>
+    <string name="piko_newx_profile_download_description">下载 @%1$s 的全部可访问媒体。图片使用原图，视频使用最高可用画质，保存至已设置的下载目录。</string>
+    <string name="piko_newx_profile_download_all">全部图片和视频</string>
+    <string name="piko_newx_profile_download_images">仅下载图片</string>
+    <string name="piko_newx_profile_download_videos">仅下载视频</string>
+    <string name="piko_newx_profile_download_unavailable">请刷新用户主页后重试。</string>
+    <string name="piko_newx_profile_download_cancel">取消下载</string>
+    <string name="piko_newx_profile_download_close">关闭</string>
+    <string name="piko_newx_profile_download_cancelled">下载已取消，已保存的文件予以保留。</string>
+    <string name="piko_newx_profile_download_finished">已处理全部可访问媒体。</string>
+    <string name="piko_newx_profile_download_working">正在下载：已读取 %1$d 页，找到 %2$d 个媒体</string>
+    <string name="piko_newx_profile_download_progress">已保存 %1$d · 已跳过 %2$d · 失败 %3$d · 不可用 %4$d</string>
+    <string name="piko_newx_profile_download_folder_required">请选择下载目录后重新开始。</string>
+    <string name="piko_newx_profile_download_rate_limit">已达到 X 请求频率限制。已保存的文件予以保留，请稍后重试。</string>
+    <string name="piko_newx_profile_download_failed">未能完整读取此主页。已保存的文件予以保留，请稍后重试。</string>
+    <string name="piko_newx_profile_download_account_changed">登录账号已切换，下载已停止。</string>
 </resources>
