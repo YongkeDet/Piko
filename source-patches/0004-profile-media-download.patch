@@ -442,8 +442,8 @@
 +        }
 +        if (match == null) return false;
 +        MenuEntry target = match;
-+        // Native menu dismissal finishes before showing the download sheet.
-+        NewXUtils.runOnUiThread(() -> show(target));
++        // Show the sheet after the native click callback has returned.
++        new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> show(target));
 +        return true;
 +    }
 +
