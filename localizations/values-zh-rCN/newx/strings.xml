@@ -521,6 +521,7 @@
     <string name="piko_newx_profile_download_close">关闭</string>
     <string name="piko_newx_profile_download_cancelled">下载已取消，已保存的文件予以保留。</string>
     <string name="piko_newx_profile_download_finished">已处理全部可访问媒体。</string>
+    <string name="piko_newx_profile_download_pagination_stopped">X 未能继续提供新内容，已停止翻页。已找到的媒体已处理。</string>
     <string name="piko_newx_profile_download_working">正在下载：已读取 %1$d 页，找到 %2$d 个媒体</string>
     <string name="piko_newx_profile_download_progress">已保存 %1$d · 已跳过 %2$d · 失败 %3$d · 不可用 %4$d</string>
     <string name="piko_newx_profile_download_folder_required">请选择下载目录后重新开始。</string>

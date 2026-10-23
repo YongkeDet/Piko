@@ -26,6 +26,7 @@
     <string name="piko_newx_profile_download_close">Close</string>
     <string name="piko_newx_profile_download_cancelled">Download cancelled. Saved files are kept.</string>
     <string name="piko_newx_profile_download_finished">All accessible media processed.</string>
+    <string name="piko_newx_profile_download_pagination_stopped">X did not provide more new content. Paging stopped and the media found has been processed.</string>
     <string name="piko_newx_profile_download_working">Downloading: %1$d pages, %2$d media found</string>
     <string name="piko_newx_profile_download_progress">Saved %1$d · Skipped %2$d · Failed %3$d · Unavailable %4$d</string>
     <string name="piko_newx_profile_download_folder_required">Choose a download folder, then start again.</string>

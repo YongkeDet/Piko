@@ -93,7 +93,7 @@
      static String withResolutionSuffix(String fileName, String resolution) {
 --- /dev/null
 +++ b/extensions/newx/src/main/java/app/morphe/extension/newx/misc/ProfileMediaPage.java
-@@ -0,0 +1,170 @@
+@@ -0,0 +1,195 @@
 +package app.morphe.extension.newx.misc;
 +
 +import org.json.JSONArray;
@@ -102,15 +102,39 @@
 +
 +import java.net.URI;
 +import java.util.ArrayList;
++import java.util.HashSet;
 +import java.util.Iterator;
 +import java.util.List;
++import java.util.Set;
 +
 +/** Parses the native profile media query, including modules and response objects. */
 +final class ProfileMediaPage {
 +    final List<Item> items = new ArrayList<>();
++    // Include unavailable attachments and every media type, before the download filter.
++    final Set<String> mediaKeys = new HashSet<>();
 +    String cursor;
 +    int unavailable;
 +    private boolean terminated;
++
++    /** A changing cursor alone is not proof that the media timeline is advancing. */
++    static final class Pagination {
++        private static final int MAX_PAGES_WITHOUT_NEW_MEDIA = 3;
++        private final Set<String> seenMedia = new HashSet<>(), seenCursors = new HashSet<>();
++        private int pagesWithoutNewMedia;
++        boolean stoppedWithoutEnd;
++
++        String next(ProfileMediaPage page) {
++            boolean progressed = false;
++            for (String key : page.mediaKeys) progressed |= seenMedia.add(key);
++            pagesWithoutNewMedia = progressed ? 0 : pagesWithoutNewMedia + 1;
++            if (page.cursor == null) return null;
++            if (!seenCursors.add(page.cursor) || pagesWithoutNewMedia >= MAX_PAGES_WITHOUT_NEW_MEDIA) {
++                stoppedWithoutEnd = true;
++                return null;
++            }
++            return page.cursor;
++        }
++    }
 +
 +    static final class Item {
 +        final String key, postId, handle, name, timestamp, url, extension, mimeType, resolution;
@@ -200,6 +224,9 @@
 +            JSONObject entity = media.optJSONObject(i);
 +            if (entity == null) continue;
 +            JSONObject result = object(object(entity, "media_results"), "result");
++            String mediaId = result.optString("media_id", result.optString("id", entity.optString("id_str")));
++            String key = mediaId.isEmpty() ? postId + ":" + i : mediaId;
++            mediaKeys.add(key);
 +            JSONObject info = object(result, "media_info");
 +            String type = info.optString("__typename");
 +            String url = "", extension = "", mime = "", resolution = null;
@@ -230,8 +257,6 @@
 +                unavailable++;
 +                continue;
 +            }
-+            String mediaId = result.optString("media_id", result.optString("id", entity.optString("id_str")));
-+            String key = mediaId.isEmpty() ? postId + ":" + i : mediaId;
 +            JSONObject source = object(object(object(entity, "source_user_results"), "result"), "core");
 +            String mediaHandle = source.optString("screen_name", handle);
 +            String mediaName = source.optString("name", name);
@@ -372,7 +397,7 @@
 +}
 --- /dev/null
 +++ b/extensions/newx/src/main/java/app/morphe/extension/newx/misc/ProfileMediaDownloader.java
-@@ -0,0 +1,282 @@
+@@ -0,0 +1,284 @@
 +package app.morphe.extension.newx.misc;
 +
 +import android.app.Activity;
@@ -533,7 +558,8 @@
 +        final int kind;
 +        final ProfileMediaSession session;
 +        final List<DownloadHandle> pending = new ArrayList<>();
-+        final Set<String> seenMedia = new HashSet<>(), seenCursors = new HashSet<>();
++        final Set<String> seenMedia = new HashSet<>();
++        final ProfileMediaPage.Pagination pagination = new ProfileMediaPage.Pagination();
 +        volatile boolean cancelled, done;
 +        volatile int pages, found, saved, skipped, failed, unavailable;
 +        volatile String problem;
@@ -609,12 +635,13 @@
 +                        reap();
 +                        refresh();
 +                    }
-+                    cursor = page.cursor;
-+                    if (cursor != null && !seenCursors.add(cursor)) throw new IllegalStateException("Repeated profile media cursor");
++                    cursor = pagination.next(page);
++                    refresh();
 +                    // Avoid a burst of page requests on profiles whose files are already saved.
 +                    if (cursor != null) Thread.sleep(1000);
 +                } while (cursor != null);
 +                while (!pending.isEmpty()) { checkCancelled(); reap(); if (!pending.isEmpty()) Thread.sleep(200); }
++                if (pagination.stoppedWithoutEnd) problem = text("pagination_stopped");
 +            } catch (InterruptedException ignored) {
 +                // User cancellation, account change or lost folder: cancel only this job's files.
 +            } catch (Exception exception) {
@@ -657,7 +684,7 @@
 +}
 --- /dev/null
 +++ b/extensions/newx/src/test/java/app/morphe/extension/newx/misc/ProfileMediaPageTest.java
-@@ -0,0 +1,88 @@
+@@ -0,0 +1,148 @@
 +package app.morphe.extension.newx.misc;
 +
 +import static org.junit.Assert.*;
@@ -667,7 +694,7 @@
 +import org.json.JSONObject;
 +import org.junit.Test;
 +
-+/** Prevents empty-success on native schema drift and accidental downloads of quoted media. */
++/** Guards native schema drift, quoted media and unbounded paging after media is exhausted. */
 +public class ProfileMediaPageTest {
 +    private static JSONObject response(JSONArray instructions) throws JSONException {
 +        return new JSONObject().put("data", new JSONObject().put("user_result", new JSONObject().put("result",
@@ -688,6 +715,13 @@
 +                .put("core", new JSONObject().put("user_results", new JSONObject().put("result",
 +                        new JSONObject().put("rest_id", "42").put("core", new JSONObject()
 +                                .put("screen_name", "jack").put("name", "Jack")))));
++    }
++
++    private static ProfileMediaPage page(JSONArray media, String cursor) throws JSONException {
++        JSONArray instructions = new JSONArray().put(post(media));
++        if (cursor != null) instructions.put(new JSONObject().put("__typename", "TimelineTimelineCursor")
++                .put("cursor_type", "Bottom").put("value", cursor));
++        return ProfileMediaPage.parse(response(instructions).toString(), "42", "jack");
 +    }
 +
 +    @Test public void nativeModulesPreserveAllAttachmentsAndHighestMp4WithoutQuotedMedia() throws Exception {
@@ -725,8 +759,61 @@
 +        ProfileMediaPage page = ProfileMediaPage.parse(response(instructions).toString(), "42", "jack");
 +        assertEquals("next", page.cursor);
 +        assertTrue(page.items.isEmpty());
++        ProfileMediaPage.Pagination pagination = new ProfileMediaPage.Pagination();
++        assertEquals("next", pagination.next(page));
 +        instructions.put(new JSONObject().put("__typename", "TimelineTerminateTimeline").put("direction", "Bottom"));
-+        assertNull(ProfileMediaPage.parse(response(instructions).toString(), "42", "jack").cursor);
++        ProfileMediaPage end = ProfileMediaPage.parse(response(instructions).toString(), "42", "jack");
++        assertNull(end.cursor);
++        assertNull(pagination.next(end));
++        assertFalse(pagination.stoppedWithoutEnd);
++    }
++
++    @Test public void rotatingCursorsCannotKeepEmptyOrDuplicateMediaPagesRunningForever() throws Exception {
++        JSONArray attachments = new JSONArray().put(image("a", "https://pbs.twimg.com/media/a.jpg"));
++        for (boolean duplicate : new boolean[]{false, true}) {
++            ProfileMediaPage.Pagination pagination = new ProfileMediaPage.Pagination();
++            assertEquals("p1", pagination.next(page(attachments, "p1")));
++            JSONArray unchanged = duplicate ? attachments : new JSONArray();
++            assertEquals("p2", pagination.next(page(unchanged, "p2")));
++            assertEquals("p3", pagination.next(page(unchanged, "p3")));
++            assertNull(pagination.next(page(unchanged, "p4")));
++            assertTrue(pagination.stoppedWithoutEnd);
++        }
++    }
++
++    @Test public void newAttachmentsResetPagingBudgetBeforeMediaFiltersAndAvailabilityChecks() throws Exception {
++        ProfileMediaPage.Pagination pagination = new ProfileMediaPage.Pagination();
++        JSONArray image = new JSONArray().put(image("a", "https://pbs.twimg.com/media/a.jpg"));
++        assertEquals("p1", pagination.next(page(image, "p1")));
++        assertEquals("p2", pagination.next(page(new JSONArray(), "p2")));
++        assertEquals("p3", pagination.next(page(image, "p3")));
++        JSONObject video = new JSONObject().put("id_str", "video").put("media_results", new JSONObject().put("result",
++                new JSONObject().put("media_id", "video").put("media_info", new JSONObject().put("__typename", "ApiVideo")
++                        .put("variants", new JSONArray().put(new JSONObject().put("content_type", "video/mp4")
++                                .put("url", "https://video.twimg.com/video.mp4"))))));
++        assertEquals("p4", pagination.next(page(new JSONArray().put(video), "p4")));
++        assertEquals("p5", pagination.next(page(new JSONArray(), "p5")));
++        assertEquals("p6", pagination.next(page(new JSONArray(), "p6")));
++        ProfileMediaPage unavailable = page(new JSONArray().put(image("unavailable", "https://pbs.twimg.com/missing.jpg")
++                .put("media_results", new JSONObject().put("result", JSONObject.NULL))), "p7");
++        assertTrue(unavailable.items.isEmpty());
++        assertEquals("p7", pagination.next(unavailable));
++        assertEquals("p8", pagination.next(page(new JSONArray(), "p8")));
++        assertEquals("p9", pagination.next(page(new JSONArray(), "p9")));
++        assertNull(pagination.next(page(image, "p10")));
++        assertTrue(pagination.stoppedWithoutEnd);
++    }
++
++    @Test public void repeatedCursorStopsAfterProcessingItsPageAndNaturalEndIsNotAStall() throws Exception {
++        ProfileMediaPage.Pagination pagination = new ProfileMediaPage.Pagination();
++        assertEquals("next", pagination.next(page(new JSONArray(), "next")));
++        ProfileMediaPage repeated = page(new JSONArray().put(image("last", "https://pbs.twimg.com/media/last.jpg")), "next");
++        assertEquals(1, repeated.items.size());
++        assertNull(pagination.next(repeated));
++        assertTrue(pagination.stoppedWithoutEnd);
++        ProfileMediaPage.Pagination ended = new ProfileMediaPage.Pagination();
++        assertNull(ended.next(page(new JSONArray(), null)));
++        assertFalse(ended.stoppedWithoutEnd);
 +    }
 +
 +    @Test public void unavailableFilesAreCountedAndNonMediaUrlsAreNeverDownloaded() throws Exception {
