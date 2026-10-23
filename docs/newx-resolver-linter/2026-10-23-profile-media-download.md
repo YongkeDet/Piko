@@ -12,3 +12,54 @@
 - 本地验证：四个原生响应结构回归测试通过；505 条中英文资源及格式占位符检查通过；覆盖补丁可依次应用于固定上游源码；Python 语法检查通过。
 - 完整构建与目标 APK 补丁应用验证将在开发分支运行，结果补充于此。没有控制用户设备；实机菜单、登录请求和文件写入仍需实际安装验证。
 - 发布：不创建 Release，不更新已发布的 X.26.04 或固定订阅；PR 构建仅生成 Actions 附件。
+
+## 实际 APK 验证发现及修复
+
+- 构建代码提交 `bcf6fc2f527b1e7b5fa1fe4085020b264cfe4062`，Actions 合并验证提交 `d27c23593cae9fdf8e322635fd7b598c55012be5`，上游源码不变。Morphe Desktop `1.11.0`，MPP SHA-256 `5bbc57c1828b4daa169653aa25341de124ef2047826159b30919d0f8bc18a3e2`。
+- 完整 29 分包 APKM 在默认 512 MB 堆下合并资源时发生 `java.lang.OutOfMemoryError: Java heap space`，栈位于 `com.reandroid.arsc.pool.StringPool.merge` / `ApkBundle.mergeModules`；尚未执行任何补丁。这是工具合并阶段的内存限制，与新解析器或 linter 无关。
+- 同一版本基础 APK 通过 `patch-twitter.sh E:/Artificial Intelligence/Piko/tmp_2b7ccc14/base.apk` 在默认 512 MB 下进入实际补丁阶段。失败补丁 `NewX: Download all profile media`，完整异常如下：
+
+```text
+app.morphe.patcher.patch.PatchException: Failed to match the fingerprint: app.morphe.patcher.Fingerprint@57b7d357
+	at app.morphe.patcher.Fingerprint.patchException(Fingerprint.kt:664)
+	at app.crimera.patches.utils.ScopedFingerprintMatchingKt.scopedMatchAll(ScopedFingerprintMatching.kt:178)
+	at app.crimera.patches.newx.misc.profiledownload.ProfileMediaDownloadPatchKt.newXProfileMediaDownloadPatch$lambda$0$0(ProfileMediaDownloadPatch.kt:122)
+	at app.morphe.patcher.patch.Patch.execute(Patch.kt:126)
+	at app.morphe.patcher.patch.BytecodePatch.execute$morphe_patcher(Patch.kt:241)
+	at app.morphe.patcher.Patcher$invoke$1.invokeSuspend$execute(Patcher.kt:96)
+	at app.morphe.patcher.Patcher$invoke$1.invokeSuspend(Patcher.kt:120)
+	at app.morphe.patcher.Patcher$invoke$1.invoke(Patcher.kt)
+	at app.morphe.patcher.Patcher$invoke$1.invoke(Patcher.kt)
+	at kotlinx.coroutines.flow.SafeFlow.collectSafely(Builders.kt:57)
+	at kotlinx.coroutines.flow.AbstractFlow.collect(Flow.kt:226)
+	at app.morphe.cli.command.PatchCommand$call$3$3$1.invokeSuspend(PatchCommand.kt:794)
+	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:34)
+	at kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:100)
+	at kotlinx.coroutines.EventLoopImplBase.processNextEvent(EventLoop.common.kt:256)
+	at kotlinx.coroutines.BlockingCoroutine.joinBlocking(Builders.kt:54)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlockingImpl(Builders.kt:30)
+	at kotlinx.coroutines.BuildersKt.runBlockingImpl(Unknown Source)
+	at kotlinx.coroutines.BuildersKt__Builders_concurrentKt.runBlockingK(Builders.concurrent.kt:172)
+	at kotlinx.coroutines.BuildersKt.runBlockingK(Unknown Source)
+	at kotlinx.coroutines.BuildersKt__Builders_concurrentKt.runBlockingK$default(Builders.concurrent.kt:157)
+	at kotlinx.coroutines.BuildersKt.runBlockingK$default(Unknown Source)
+	at app.morphe.cli.command.PatchCommand.call$lambda$13$2(PatchCommand.kt:793)
+	at app.morphe.cli.command.model.PatchingResultKt.addStepResult(PatchingResult.kt:29)
+	at app.morphe.cli.command.PatchCommand.call(PatchCommand.kt:790)
+	at app.morphe.cli.command.PatchCommand.call(PatchCommand.kt:55)
+	at picocli.CommandLine.executeUserObject(CommandLine.java:2031)
+	at picocli.CommandLine.access$1500(CommandLine.java:148)
+	at picocli.CommandLine$RunLast.executeUserObjectOfLastSubcommandWithSameParent(CommandLine.java:2469)
+	at picocli.CommandLine$RunLast.handle(CommandLine.java:2461)
+	at picocli.CommandLine$RunLast.handle(CommandLine.java:2423)
+	at picocli.CommandLine$AbstractParseResultHandler.execute(CommandLine.java:2277)
+	at picocli.CommandLine$RunLast.execute(CommandLine.java:2425)
+	at picocli.CommandLine.execute(CommandLine.java:2174)
+	at app.morphe.MorpheLauncherKt.main(MorpheLauncher.kt:23)
+ 
+严重:
+```
+
+- 定位：composer 指纹的 InstructionFilter 按顺序匹配 URL → variables → features，实际 12.35 的同一方法先加载 features 再加载 variables。原因属于解析器逻辑，不是 linter 或基数辅助函数。
+- 修复：仅用端点字符串作候选索引，再通过 `isNativeProfileMediaComposer` 检查三个标签的集合、HTTP 返回类型和参数形状；字符串加载顺序不再作为契约。
+- 回归：加入既有 `NewXResolverLinterTest`，覆盖两种标签顺序、缺少 features、错误返回类型，直接调用生产选择条件。

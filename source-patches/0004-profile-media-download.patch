@@ -744,7 +744,7 @@
 +}
 --- /dev/null
 +++ b/patches/src/main/kotlin/app/crimera/patches/newx/misc/profiledownload/ProfileMediaDownloadPatch.kt
-@@ -0,0 +1,286 @@
+@@ -0,0 +1,294 @@
 +package app.crimera.patches.newx.misc.profiledownload
 +
 +import app.crimera.bytecode.Block
@@ -779,6 +779,7 @@
 +import com.android.tools.smali.dexlib2.iface.instruction.TwoRegisterInstruction
 +import com.android.tools.smali.dexlib2.iface.reference.FieldReference
 +import com.android.tools.smali.dexlib2.iface.reference.MethodReference
++import com.android.tools.smali.dexlib2.iface.reference.StringReference
 +
 +private const val OBJECT = "Ljava/lang/Object;"
 +private const val STRING = "Ljava/lang/String;"
@@ -864,8 +865,8 @@
 +        }
 +
 +        val composer = requireExactlyOne("native GraphQL request composer", Fingerprint(
-+            filters = listOf(string("https://api.x.com/graphql"), string("variables"), string("features")),
-+            custom = { method, _ -> method.parameterTypes.size == 1 && method.returnType.startsWith("Lcom/apollographql/apollo/api/http/") },
++            filters = listOf(string("https://api.x.com/graphql")),
++            custom = { method, _ -> isNativeProfileMediaComposer(method) },
 +        ).scopedMatchAll()).method
 +        val queryClass = markedClass("UserProfileMediaTimelineQuery")
 +        val queryCtor = requireExactlyOne("native profile media query constructor", queryClass.methods.filter {
@@ -1012,6 +1013,13 @@
 +
 +private fun Method.code(): List<Instruction> = implementation?.instructions?.toList().orEmpty()
 +
++/** R8 can emit feature/variable labels in either order; their presence is the contract. */
++internal fun isNativeProfileMediaComposer(method: Method): Boolean {
++    if (method.parameterTypes.size != 1 || !method.returnType.startsWith("Lcom/apollographql/apollo/api/http/")) return false
++    val labels = method.code().mapNotNull { it.getReference<StringReference>()?.string }.toSet()
++    return labels.containsAll(listOf("https://api.x.com/graphql", "variables", "features"))
++}
++
 +private fun Instruction.isListOfNotNull(): Boolean = getReference<MethodReference>()?.let {
 +    it.definingClass == "Lkotlin/collections/CollectionsKt;" && it.name == "listOfNotNull" &&
 +        it.parameterTypes.map(CharSequence::toString) == listOf("[Ljava/lang/Object;") && it.returnType == LIST
@@ -1031,3 +1039,41 @@
 +    methods.add(method)
 +    method.insertHook(0, relocateBranchTargets = false) { body(method) }
 +}
+--- a/patches/src/test/kotlin/app/crimera/tools/newx/NewXResolverLinterTest.kt
++++ b/patches/src/test/kotlin/app/crimera/tools/newx/NewXResolverLinterTest.kt
+@@ -1,6 +1,7 @@
+ package app.crimera.tools.newx
+ 
+ import app.crimera.patches.newx.misc.canonicalurls.constructsProfileHeaderModel
++import app.crimera.patches.newx.misc.profiledownload.isNativeProfileMediaComposer
+ import app.crimera.patches.newx.misc.mediatab.isInitialSubTabSeed
+ import app.crimera.patches.newx.misc.mediatab.isPendingSubTabStore
+ import app.crimera.patches.newx.models.isInlineActionKindModelConstructor
+@@ -32,6 +33,27 @@
+ 
+ class NewXResolverLinterTest {
+     @Test
++    fun `native profile composer accepts either feature variable label order and rejects incomplete shapes`() {
++        val endpoint = "https://api.x.com/graphql"
++        assertTrue(isNativeProfileMediaComposer(profileComposerFixture(listOf(endpoint, "features", "variables"))))
++        assertTrue(isNativeProfileMediaComposer(profileComposerFixture(listOf(endpoint, "variables", "features"))))
++        assertFalse(isNativeProfileMediaComposer(profileComposerFixture(listOf(endpoint, "variables"))))
++        assertFalse(isNativeProfileMediaComposer(profileComposerFixture(listOf(endpoint, "features", "variables"), "Ljava/lang/Object;")))
++    }
++
++    private fun profileComposerFixture(labels: List<String>, result: String = "Lcom/apollographql/apollo/api/http/Request;"): Method =
++        ImmutableMethod(
++            "Lcom/x/network/Composer;", "compose",
++            listOf(ImmutableMethodParameter("Ljava/lang/Object;", emptySet(), null)), result,
++            AccessFlags.PUBLIC.value or AccessFlags.STATIC.value, emptySet(), emptySet(),
++            MethodImplementationBuilder(2).apply {
++                labels.forEach { addInstruction("const-string v0, \"$it\"".toInstruction()) }
++                addInstruction("const/4 v0, 0x0".toInstruction())
++                addInstruction("return-object v0".toInstruction())
++            }.methodImplementation,
++        )
++
++    @Test
+     fun `new-post resolver survives null-check churn and rejects modifier lookalike`() {
+         val controlRenderer = newPostRendererFixture(namedNullCheck = true, directModifier = true)
+         val controlLookalike = newPostRendererFixture(namedNullCheck = true, directModifier = false)
