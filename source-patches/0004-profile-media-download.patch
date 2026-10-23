@@ -570,7 +570,7 @@
 +                for (NewXDownloadFolders.MediaKind mediaKind : NewXDownloadFolders.MediaKind.values()) {
 +                    if (kind == 1 && mediaKind != NewXDownloadFolders.MediaKind.IMAGES
 +                            || kind == 2 && mediaKind != NewXDownloadFolders.MediaKind.VIDEOS) continue;
-+                    if (NewXDownloadFolders.destinationState(context, mediaKind) != NewXDownloadFolders.DestinationState.LIVE) {
++                    if (!NewXDownloadFolders.isConfigured(context, mediaKind)) {
 +                        problem = text("folder_required");
 +                        NewXUtils.runOnUiThread(() -> NewXDownloadFolders.choose(context, mediaKind));
 +                        return;

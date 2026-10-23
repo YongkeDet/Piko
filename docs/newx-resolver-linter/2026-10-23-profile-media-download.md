@@ -158,3 +158,7 @@ app.morphe.patcher.patch.PatchException: Native profile query is not an Apollo o
 - 实际继承链为生成 Query → Query 标记接口 → Operation。共享库 0.8.0 的 `isAssignableTo` 检查直接接口和父类，没有遍历接口的父接口，所以直接传生成类产生了假阴性。
 - 本补丁只适配已验证的 Apollo Query 标记契约：对生成类明确声明的标记接口调用现有共享辅助函数，再验证它可赋给原生请求的 Operation。没有复制通用层级遍历器，也没有修改共享库或影响旧的集合检查。
 - 回归：既有原生查询 fixture 增加真实两级类型链、注册表和不兼容 Operation 控制例，通过生产入口 `supportsNativeProfileOperation` 验证。
+
+### 目录授权静态审计
+
+- 批量任务复用 `NewXDownloadFolders.isConfigured` 检查目标目录，同时接受持久授权 `PERSISTED` 和进程内有效授权 `LIVE`。此前只接受 `LIVE` 会误拒绝正常持久授权的目录；检查在本次 APK 验证前纠正，未发布。
