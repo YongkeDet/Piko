@@ -111,3 +111,5 @@ app.morphe.patcher.patch.PatchException: Expected exactly one profile download U
 - 定位：操作名称同时存在于注册表 `Lcom/x/android/p0;` 和生成类 `Lcom/x/android/main/e11;`。基数校验正确拒绝歧义；问题属于解析器缺少查询契约筛选，不是 linter 或辅助函数故障。
 - 修复：候选必须同时提供操作名方法、媒体查询文档和已验证的双 String 构造器，再要求恰好一项。没有写入上述混淆类名。
 - 回归：既有 `NewXResolverLinterTest` 通过生产选择入口覆盖“注册表 + 正确查询”、仅注册表和多个生成查询。
+
+- 后续完整字节码审计发现 OAuth 范围内另有一个保存 UserIdentifier 的拦截器。账号桥接进一步要求原生 `X-Twitter-Active-User` 请求头语义锚点；既有 fixture 集加入对应正反例。此项是在再次应用前发现的歧义，不属于实机失败。

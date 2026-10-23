@@ -748,7 +748,7 @@
 +}
 --- /dev/null
 +++ b/patches/src/main/kotlin/app/crimera/patches/newx/misc/profiledownload/ProfileMediaDownloadPatch.kt
-@@ -0,0 +1,309 @@
+@@ -0,0 +1,315 @@
 +package app.crimera.patches.newx.misc.profiledownload
 +
 +import app.crimera.bytecode.Block
@@ -933,8 +933,9 @@
 +        }).publicField()
 +        val accountInterceptor = requireExactlyOne("native account-bound HTTP interceptor", Fingerprint(
 +            returnType = "Lokhttp3/Response;",
++            filters = listOf(string("X-Twitter-Active-User")),
 +            custom = { method, classDef ->
-+                method.name == "intercept" && classDef.type.startsWith("Lcom/x/oauth/") &&
++                isNativeActiveUserInterceptor(method) && classDef.type.startsWith("Lcom/x/oauth/") &&
 +                    classDef.interfaces.contains("Lokhttp3/Interceptor;") &&
 +                    classDef.fields.count { !AccessFlags.STATIC.isSet(it.accessFlags) && it.type == userIdField.type } == 1
 +            },
@@ -1024,6 +1025,11 @@
 +    return labels.containsAll(listOf("https://api.x.com/graphql", "variables", "features"))
 +}
 +
++internal fun isNativeActiveUserInterceptor(method: Method): Boolean =
++    method.name == "intercept" && method.returnType == "Lokhttp3/Response;" &&
++        method.parameterTypes.map(CharSequence::toString) == listOf("Lokhttp3/Interceptor\$Chain;") &&
++        method.code().any { it.getReference<StringReference>()?.string == "X-Twitter-Active-User" }
++
 +/** Operation registries carry the same name string as generated query classes. */
 +internal fun selectNativeProfileMediaQuery(candidates: Collection<ClassDef>): ClassDef =
 +    requireExactlyOne("native profile media query class", candidates.filter { classDef ->
@@ -1060,16 +1066,17 @@
 +}
 --- a/patches/src/test/kotlin/app/crimera/tools/newx/NewXResolverLinterTest.kt
 +++ b/patches/src/test/kotlin/app/crimera/tools/newx/NewXResolverLinterTest.kt
-@@ -1,6 +1,8 @@
+@@ -1,6 +1,9 @@
  package app.crimera.tools.newx
  
  import app.crimera.patches.newx.misc.canonicalurls.constructsProfileHeaderModel
 +import app.crimera.patches.newx.misc.profiledownload.isNativeProfileMediaComposer
 +import app.crimera.patches.newx.misc.profiledownload.selectNativeProfileMediaQuery
++import app.crimera.patches.newx.misc.profiledownload.isNativeActiveUserInterceptor
  import app.crimera.patches.newx.misc.mediatab.isInitialSubTabSeed
  import app.crimera.patches.newx.misc.mediatab.isPendingSubTabStore
  import app.crimera.patches.newx.models.isInlineActionKindModelConstructor
-@@ -19,6 +21,7 @@
+@@ -19,6 +22,7 @@
  import com.android.tools.smali.dexlib2.iface.Method
  import com.android.tools.smali.dexlib2.iface.instruction.Instruction
  import com.android.tools.smali.dexlib2.immutable.ImmutableAnnotation
@@ -1077,10 +1084,26 @@
  import com.android.tools.smali.dexlib2.immutable.ImmutableMethod
  import com.android.tools.smali.dexlib2.immutable.ImmutableMethodParameter
  import java.nio.file.Files
-@@ -31,6 +34,59 @@
+@@ -31,6 +35,75 @@
  import kotlin.test.assertTrue
  
  class NewXResolverLinterTest {
++    @Test
++    fun `native account lookup requires the active-user interceptor rather than another account interceptor`() {
++        fun interceptor(marker: String, result: String = "Lokhttp3/Response;"): Method = ImmutableMethod(
++            "Lfixture/AccountInterceptor;", "intercept",
++            listOf(ImmutableMethodParameter("Lokhttp3/Interceptor\$Chain;", emptySet(), null)), result,
++            AccessFlags.PUBLIC.value, emptySet(), emptySet(), MethodImplementationBuilder(2).apply {
++                addInstruction("const-string v0, \"$marker\"".toInstruction())
++                addInstruction("const/4 v0, 0x0".toInstruction())
++                addInstruction("return-object v0".toInstruction())
++            }.methodImplementation,
++        )
++        assertTrue(isNativeActiveUserInterceptor(interceptor("X-Twitter-Active-User")))
++        assertFalse(isNativeActiveUserInterceptor(interceptor("X-Twitter-Client")))
++        assertFalse(isNativeActiveUserInterceptor(interceptor("X-Twitter-Active-User", "Ljava/lang/Object;")))
++    }
++
 +    @Test
 +    fun `native profile query excludes the operation registry and rejects ambiguous generated queries`() {
 +        val query = profileQueryFixture("Lfixture/GeneratedQuery;", true)
