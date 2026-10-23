@@ -1,0 +1,161 @@
+--- a/extensions/newx/src/main/java/app/morphe/extension/newx/featureswitches/FeatureSwitchAdapter.java
++++ b/extensions/newx/src/main/java/app/morphe/extension/newx/featureswitches/FeatureSwitchAdapter.java
+@@ -130,7 +130,10 @@
+         row.value.setTypeface(
+                 Typeface.create(row.valueTypeface, overridden ? Typeface.BOLD : Typeface.NORMAL)
+         );
+-        row.key.setText(highlightedKey(entry.getKey()));
++        String title = FeatureSwitchLabels.title(context, entry.getKey());
++        row.key.setText(highlightedText(title));
++        row.originalKey.setText(highlightedText(entry.getKey()));
++        row.originalKey.setVisibility(title.equals(entry.getKey()) ? View.GONE : View.VISIBLE);
+         row.value.setText(valueText(entry.getEffectiveValue()));
+ 
+         if (entry.isNew()) {
+@@ -215,15 +218,25 @@
+         root.addView(newDot, dotParams);
+ 
+         TextView key = SettingsUi.titleText(context);
+-        key.setSingleLine(true);
++        key.setSingleLine(false);
++        key.setMaxLines(2);
+         key.setEllipsize(TextUtils.TruncateAt.END);
++        TextView originalKey = SettingsUi.summaryText(context);
++        originalKey.setTextSize(12);
++        originalKey.setSingleLine(true);
++        originalKey.setEllipsize(TextUtils.TruncateAt.END);
++        originalKey.setPadding(0, Theme.dpToPx(context, 3f), 0, 0);
++        LinearLayout names = new LinearLayout(context);
++        names.setOrientation(LinearLayout.VERTICAL);
++        names.addView(key, new LinearLayout.LayoutParams(-1, -2));
++        names.addView(originalKey, new LinearLayout.LayoutParams(-1, -2));
+         LinearLayout.LayoutParams keyParams = new LinearLayout.LayoutParams(
+                 0,
+                 LinearLayout.LayoutParams.WRAP_CONTENT,
+                 1f
+         );
+         keyParams.setMarginEnd(Theme.dpToPx(context, 12f));
+-        root.addView(key, keyParams);
++        root.addView(names, keyParams);
+ 
+         TextView value = SettingsUi.summaryText(context);
+         value.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+@@ -234,10 +247,10 @@
+                 LinearLayout.LayoutParams.WRAP_CONTENT,
+                 LinearLayout.LayoutParams.WRAP_CONTENT
+         ));
+-        return new Row(root, newDot, key, value, key.getTypeface(), value.getTypeface());
+-    }
+-
+-    private CharSequence highlightedKey(String key) {
++        return new Row(root, newDot, key, originalKey, value, key.getTypeface(), value.getTypeface());
++    }
++
++    private CharSequence highlightedText(String key) {
+         if (query.isEmpty()) return key;
+         int start = key.toLowerCase(Locale.ROOT).indexOf(query.toLowerCase(Locale.ROOT));
+         if (start < 0) return key;
+@@ -253,11 +266,14 @@
+ 
+     private String valueText(Object value) {
+         if (value == null) return StringRef.str("piko_newx_feature_switch_null").toString();
++        if (value instanceof Boolean flag) {
++            return StringRef.str(flag ? "piko_newx_feature_switch_true" : "piko_newx_feature_switch_false");
++        }
+         if (value instanceof List<?> list) {
+-            if (list.isEmpty()) return "[]";
++            if (list.isEmpty()) return StringRef.str("piko_newx_feature_switch_empty_list");
+             return "[" + NewXUtils.joinValues(list, ", ") + "]";
+         }
+-        if (value instanceof String string && string.isEmpty()) return "\"\"";
++        if (value instanceof String string && string.isEmpty()) return StringRef.str("piko_newx_feature_switch_empty_string");
+         return String.valueOf(value);
+     }
+ 
+@@ -375,6 +391,7 @@
+         final LinearLayout root;
+         final View newDot;
+         final TextView key;
++        final TextView originalKey;
+         final TextView value;
+         final Typeface keyTypeface;
+         final Typeface valueTypeface;
+@@ -383,6 +400,7 @@
+                 LinearLayout root,
+                 View newDot,
+                 TextView key,
++                TextView originalKey,
+                 TextView value,
+                 Typeface keyTypeface,
+                 Typeface valueTypeface
+@@ -390,6 +408,7 @@
+             this.root = root;
+             this.newDot = newDot;
+             this.key = key;
++            this.originalKey = originalKey;
+             this.value = value;
+             this.keyTypeface = keyTypeface;
+             this.valueTypeface = valueTypeface;
+--- a/extensions/newx/src/main/java/app/morphe/extension/newx/featureswitches/FeatureSwitchFragment.java
++++ b/extensions/newx/src/main/java/app/morphe/extension/newx/featureswitches/FeatureSwitchFragment.java
+@@ -293,7 +293,7 @@
+ 
+         DialogView dialog = new DialogView(context)
+                 .setTitle(StringRef.str("piko_newx_feature_switch_edit_title"))
+-                .setSubtitle(featureKey)
++                .setSubtitle(FeatureSwitchLabels.editorSubtitle(context, featureKey))
+                 .setBodyView(form);
+         ButtonView remove = null;
+         if (overridden) {
+@@ -465,7 +465,11 @@
+             sessionNewKeys.addAll(store.getUnseenKeys());
+         }
+         String query = search == null ? "" : search.getText().toString();
+-        List<FeatureSwitchStore.Entry> entries = store.snapshot(query, sessionNewKeys);
++        List<FeatureSwitchStore.Entry> entries = new ArrayList<>();
++        Context context = requireContext();
++        for (FeatureSwitchStore.Entry entry : store.snapshot("", sessionNewKeys)) {
++            if (FeatureSwitchLabels.matches(context, entry.getKey(), query)) entries.add(entry);
++        }
+         adapter.submit(entries, query);
+         emptyState.setText(StringRef.str(query.trim().isEmpty()
+                 ? "piko_newx_feature_switch_empty"
+--- /dev/null
++++ b/extensions/newx/src/main/java/app/morphe/extension/newx/featureswitches/FeatureSwitchLabels.java
+@@ -0,0 +1,36 @@
++package app.morphe.extension.newx.featureswitches;
++
++import android.content.Context;
++import android.content.res.Resources;
++import java.util.Locale;
++import java.util.concurrent.ConcurrentHashMap;
++
++/** Display aliases only. Repository keys, observations and persisted values stay untouched. */
++final class FeatureSwitchLabels {
++    private static final ConcurrentHashMap<String, Integer> IDS = new ConcurrentHashMap<>();
++    private FeatureSwitchLabels() { }
++
++    static String title(Context context, String key) {
++        if (key == null || key.isEmpty()) return "";
++        // Only exact catalog keys map to resources. Future keys keep their original spelling.
++        if (!key.matches("[a-z][a-z0-9_]+")) return key;
++        try {
++            int id = IDS.computeIfAbsent(key, name -> context.getResources().getIdentifier(
++                    "piko_newx_fs_" + name, "string", context.getPackageName()));
++            return id == 0 ? key : context.getString(id);
++        } catch (Resources.NotFoundException ignored) {
++            return key;
++        }
++    }
++
++    static boolean matches(Context context, String key, String query) {
++        String needle = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
++        return needle.isEmpty() || key.toLowerCase(Locale.ROOT).contains(needle)
++                || title(context, key).toLowerCase(Locale.ROOT).contains(needle);
++    }
++
++    static String editorSubtitle(Context context, String key) {
++        String title = title(context, key);
++        return title.equals(key) ? key : title + "\n" + key;
++    }
++}

@@ -65,7 +65,11 @@ def apply_download_dialog_localization(piko_directory: Path) -> None:
         )
         subprocess.run(["git", "apply", str(source_patch)], cwd=piko_directory, check=True)
     strings = piko_directory / "patches/src/main/resources/addresources/values/newx/strings.xml"
-    additions = ET.parse(root / "localizations/values/newx/download-dialogs.xml").getroot()
+    additions = [
+        entry
+        for resource in sorted((root / "localizations/values/newx").glob("*.xml"))
+        for entry in ET.parse(resource).getroot()
+    ]
     names = [entry.get("name") for entry in additions]
     existing_names = {entry.get("name") for entry in ET.parse(strings).getroot()}
     if len(names) != len(set(names)) or existing_names.intersection(names):
