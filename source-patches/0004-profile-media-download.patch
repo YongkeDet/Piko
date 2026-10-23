@@ -372,7 +372,7 @@
 +}
 --- /dev/null
 +++ b/extensions/newx/src/main/java/app/morphe/extension/newx/misc/ProfileMediaDownloader.java
-@@ -0,0 +1,277 @@
+@@ -0,0 +1,278 @@
 +package app.morphe.extension.newx.misc;
 +
 +import android.app.Activity;
@@ -564,6 +564,7 @@
 +        @Override public void run() {
 +            runner = Thread.currentThread();
 +            try {
++                checkCancelled();
 +                // SAF grants are checked off the UI thread, before fetching/queueing anything.
 +                for (NewXDownloadFolders.MediaKind mediaKind : NewXDownloadFolders.MediaKind.values()) {
 +                    if (kind == 1 && mediaKind != NewXDownloadFolders.MediaKind.IMAGES
@@ -743,7 +744,7 @@
 +}
 --- /dev/null
 +++ b/patches/src/main/kotlin/app/crimera/patches/newx/misc/profiledownload/ProfileMediaDownloadPatch.kt
-@@ -0,0 +1,277 @@
+@@ -0,0 +1,286 @@
 +package app.crimera.patches.newx.misc.profiledownload
 +
 +import app.crimera.bytecode.Block
@@ -796,6 +797,15 @@
 +    dependsOn(newXInlineDownloadButtonPatch)
 +
 +    execute {
++        // Public library names may survive R8 while unused overloads are removed. Validate the
++        // extension's actual host calls, including return descriptors, before emitting hooks.
++        val hostCalls = mutableClassDefBy(SESSION).methods.flatMap { method ->
++            method.code().mapNotNull { it.getReference<MethodReference>() }
++        }.filter { it.definingClass.startsWith("Lokhttp3/") }.distinctBy(MethodReference::toString)
++        hostCalls.forEach { reference ->
++            requireExactlyOne("profile downloader host API $reference",
++                mutableClassDefBy(reference.definingClass).methods.filter { it.toString() == reference.toString() })
++        }
 +        val itemClass = markedClass("ProfileMenuItem(text=")
 +        val userClass = markedClass("ProfileUser(id=")
 +        val iconClass = markedClass("Icon(drawableRes=")
