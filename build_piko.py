@@ -270,7 +270,7 @@ def build_piko_patches(
         test_profile_media_page(piko_directory)
 
         subprocess.run(
-            ["./gradlew", "clean", "buildAndroid"],
+            ["./gradlew", "clean", "buildAndroid", ":patches:build", ":patches:lintNewxResolvers", "--no-daemon"],
             cwd=piko_directory,
             env=os.environ.copy(),
             check=True,

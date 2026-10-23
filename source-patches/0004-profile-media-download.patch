@@ -18,6 +18,15 @@
 +-dontwarn okhttp3.**
 --- a/patch-twitter.sh
 +++ b/patch-twitter.sh
+@@ -28,7 +28,7 @@
+ fi
+ 
+ DEFAULT_APK="./apks/12.31.0-alpha.02.apk"
+-OUTPUT_APK="$HOME/Downloads/piko-twitter-patched.apk"
++OUTPUT_APK="${PIKO_PATCH_OUTPUT:-$HOME/Downloads/piko-twitter-patched.apk}"
+ APK="$DEFAULT_APK"
+ FLAGS=()
+ for arg in "$@"; do
 @@ -77,6 +77,7 @@
    -e "NewX: Custom font" \
    -e "NewX: Custom sharing domain" \
@@ -84,7 +93,7 @@
      static String withResolutionSuffix(String fileName, String resolution) {
 --- /dev/null
 +++ b/extensions/newx/src/main/java/app/morphe/extension/newx/misc/ProfileMediaPage.java
-@@ -0,0 +1,157 @@
+@@ -0,0 +1,170 @@
 +package app.morphe.extension.newx.misc;
 +
 +import org.json.JSONArray;
@@ -126,7 +135,13 @@
 +    static ProfileMediaPage parse(String json, String userId, String fallbackHandle) throws JSONException {
 +        JSONObject root = new JSONObject(json);
 +        JSONArray errors = root.optJSONArray("errors");
-+        if (errors != null && errors.length() > 0) throw new JSONException("Profile media query returned errors");
++        if (errors != null && errors.length() > 0) {
++            for (int i = 0; i < errors.length(); i++) {
++                JSONObject error = errors.optJSONObject(i);
++                if (error != null && (error.optInt("code") == 88 || error.optInt("code") == 429)) throw new JSONException("rate-limit");
++            }
++            throw new JSONException("Profile media query returned errors");
++        }
 +        JSONObject user = root.getJSONObject("data").getJSONObject("user_result").getJSONObject("result");
 +        if (!"User".equals(user.optString("__typename")) || !userId.equals(user.getString("rest_id"))) {
 +            throw new JSONException("Profile is unavailable or has changed");
@@ -208,6 +223,8 @@
 +                }
 +                extension = "mp4";
 +                mime = "video/mp4";
++                java.util.regex.Matcher size = java.util.regex.Pattern.compile("/(\\d{2,5}x\\d{2,5})/").matcher(url);
++                if (size.find()) resolution = size.group(1);
 +            }
 +            if (!mediaUrl(url)) {
 +                unavailable++;
@@ -215,7 +232,12 @@
 +            }
 +            String mediaId = result.optString("media_id", result.optString("id", entity.optString("id_str")));
 +            String key = mediaId.isEmpty() ? postId + ":" + i : mediaId;
-+            items.add(new Item(key, postId, handle, name, timestamp, url, extension, mime, resolution, i, media.length()));
++            JSONObject source = object(object(object(entity, "source_user_results"), "result"), "core");
++            String mediaHandle = source.optString("screen_name", handle);
++            String mediaName = source.optString("name", name);
++            String sourceId = entity.optString("source_status_id_str");
++            String mediaPostId = sourceId.matches("[0-9]+") ? sourceId : postId;
++            items.add(new Item(key, mediaPostId, mediaHandle, mediaName, timestamp, url, extension, mime, resolution, i, media.length()));
 +        }
 +    }
 +
@@ -244,7 +266,7 @@
 +}
 --- /dev/null
 +++ b/extensions/newx/src/main/java/app/morphe/extension/newx/misc/ProfileMediaSession.java
-@@ -0,0 +1,84 @@
+@@ -0,0 +1,103 @@
 +package app.morphe.extension.newx.misc;
 +
 +import java.io.IOException;
@@ -263,12 +285,15 @@
 +    private final OkHttpClient client;
 +    private final Request template;
 +    private final Object requestComposer;
++    private final String account;
 +    private volatile Call call;
++    private volatile boolean cancelled;
 +
-+    private ProfileMediaSession(OkHttpClient client, Request template, Object composer) {
++    private ProfileMediaSession(OkHttpClient client, Request template, Object composer, String account) {
 +        this.client = client;
 +        this.template = template;
 +        this.requestComposer = composer;
++        this.account = account;
 +    }
 +
 +    public static void captureComposer(Object value) {
@@ -280,21 +305,31 @@
 +        HttpUrl url = request.url();
 +        if (!"https".equals(url.scheme()) || !"api.x.com".equals(url.host())
 +                || !url.encodedPath().startsWith("/graphql/")) return;
-+        current = new ProfileMediaSession(client, request, composer);
++        String operation = url.pathSegments().get(url.pathSegments().size() - 1);
++        if (!operation.startsWith("UserProfile") && !operation.startsWith("UserWithProfile")
++                && !operation.equals("GetUserQuery") && !operation.equals("GetUserByScreenNameQuery")) return;
++        // This is the host's account-bound interceptor, preserved by OkHttp client clones.
++        for (Object interceptor : client.interceptors()) {
++            String account = accountId(interceptor);
++            if (account != null && !account.equals("0")) {
++                current = new ProfileMediaSession(client, request, composer, account);
++                return;
++            }
++        }
 +    }
 +
 +    static ProfileMediaSession snapshot() {
 +        ProfileMediaSession value = current;
-+        return value == null ? null : new ProfileMediaSession(value.client, value.template, value.requestComposer);
++        return value == null ? null : new ProfileMediaSession(value.client, value.template, value.requestComposer, value.account);
 +    }
 +
 +    boolean isCurrent() {
 +        ProfileMediaSession value = current;
-+        return value != null && value.client == client;
++        return value != null && value.account.equals(account);
 +    }
 +
 +    String page(String userId, String cursor) throws IOException {
-+        if (!isCurrent()) throw new IOException("Account changed");
++        if (cancelled || !isCurrent()) throw new IOException("Account changed or download cancelled");
 +        String url = mediaUrl(requestComposer, userId, cursor);
 +        HttpUrl parsed = HttpUrl.parse(url);
 +        if (parsed == null || !"https".equals(parsed.scheme()) || !"api.x.com".equals(parsed.host())
@@ -310,6 +345,7 @@
 +                .tag(ProfileMediaSession.class, this).build();
 +        Call created = client.newBuilder().callTimeout(45, TimeUnit.SECONDS).build().newCall(request);
 +        call = created;
++        if (cancelled) created.cancel();
 +        try (Response response = created.execute()) {
 +            if (response.code() == 429) throw new IOException("rate-limit");
 +            if (!response.isSuccessful() || response.body() == null) throw new IOException("Profile media HTTP " + response.code());
@@ -320,6 +356,7 @@
 +    }
 +
 +    void cancel() {
++        cancelled = true;
 +        Call active = call;
 +        if (active != null) active.cancel();
 +    }
@@ -328,10 +365,14 @@
 +    private static String mediaUrl(Object composer, String userId, String cursor) {
 +        throw new IllegalStateException("Unpatched profile media query bridge");
 +    }
++
++    private static String accountId(Object interceptor) {
++        throw new IllegalStateException("Unpatched profile account bridge");
++    }
 +}
 --- /dev/null
 +++ b/extensions/newx/src/main/java/app/morphe/extension/newx/misc/ProfileMediaDownloader.java
-@@ -0,0 +1,271 @@
+@@ -0,0 +1,277 @@
 +package app.morphe.extension.newx.misc;
 +
 +import android.app.Activity;
@@ -355,7 +396,7 @@
 +import app.morphe.extension.crimera.downloader.DownloadHandle;
 +import app.morphe.extension.crimera.downloader.EnqueueResult;
 +import app.morphe.extension.crimera.downloader.model.ConflictPolicy;
-+import app.morphe.extension.crimera.settings.StringRef;
++import app.morphe.extension.shared.StringRef;
 +import app.morphe.extension.crimera.ui.ButtonView;
 +import app.morphe.extension.newx.ui.BottomSheetView;
 +import app.morphe.extension.newx.ui.IconView;
@@ -496,6 +537,7 @@
 +        volatile int pages, found, saved, skipped, failed, unavailable;
 +        volatile String problem;
 +        volatile Runnable update;
++        volatile Thread runner;
 +
 +        Job(Context context, MenuEntry target, int kind, ProfileMediaSession session) {
 +            this.context = context; this.target = target; this.kind = kind; this.session = session;
@@ -504,6 +546,8 @@
 +        void cancel() {
 +            cancelled = true;
 +            session.cancel();
++            Thread thread = runner;
++            if (thread != null) thread.interrupt();
 +            refresh();
 +        }
 +
@@ -518,6 +562,7 @@
 +        }
 +
 +        @Override public void run() {
++            runner = Thread.currentThread();
 +            try {
 +                // SAF grants are checked off the UI thread, before fetching/queueing anything.
 +                for (NewXDownloadFolders.MediaKind mediaKind : NewXDownloadFolders.MediaKind.values()) {
@@ -573,8 +618,10 @@
 +            } catch (Exception exception) {
 +                if (!cancelled) problem = text("rate-limit".equals(exception.getMessage()) ? "rate_limit" : "failed");
 +            } finally {
++                reap();
 +                for (DownloadHandle handle : pending) handle.cancel();
 +                pending.clear();
++                runner = null;
 +                done = true;
 +                refresh();
 +                NewXUtils.runOnUiThread(() -> NewXInAppNotification.showForUser(message(), target.handle));
@@ -605,7 +652,7 @@
 +}
 --- /dev/null
 +++ b/extensions/newx/src/test/java/app/morphe/extension/newx/misc/ProfileMediaPageTest.java
-@@ -0,0 +1,83 @@
+@@ -0,0 +1,88 @@
 +package app.morphe.extension.newx.misc;
 +
 +import static org.junit.Assert.*;
@@ -646,6 +693,9 @@
 +                                .put(new JSONObject().put("content_type", "video/mp4").put("bit_rate", 100).put("url", "https://video.twimg.com/low.mp4"))
 +                                .put(new JSONObject().put("content_type", "video/mp4").put("bit_rate", 300).put("url", "https://video.twimg.com/high.mp4"))))));
 +        JSONObject tweet = post(new JSONArray().put(image("a", "https://pbs.twimg.com/media/a?format=png&name=orig")).put(video));
++        tweet.getJSONArray("media_entities").getJSONObject(0).put("source_status_id_str", "77")
++                .put("source_user_results", new JSONObject().put("result", new JSONObject().put("core",
++                        new JSONObject().put("screen_name", "original_author").put("name", "Original Author"))));
 +        tweet.put("quoted_tweet_results", new JSONObject().put("result", post(new JSONArray().put(image("quoted", "https://pbs.twimg.com/media/quoted.jpg")))));
 +        JSONObject cursor = new JSONObject().put("__typename", "TimelineTimelineCursor").put("cursor_type", "Bottom").put("value", "page2");
 +        String json = response(new JSONArray().put(new JSONObject().put("__typename", "TimelineAddEntries").put("entries",
@@ -655,6 +705,8 @@
 +        assertEquals("page2", page.cursor);
 +        assertEquals("png", page.items.get(0).extension);
 +        assertEquals("4000x3000", page.items.get(0).resolution);
++        assertEquals("original_author", page.items.get(0).handle);
++        assertEquals("77", page.items.get(0).postId);
 +        assertEquals("https://video.twimg.com/high.mp4", page.items.get(1).url);
 +        assertEquals("jack", page.items.get(1).handle);
 +        assertEquals(1, page.items.get(1).index);
@@ -691,7 +743,7 @@
 +}
 --- /dev/null
 +++ b/patches/src/main/kotlin/app/crimera/patches/newx/misc/profiledownload/ProfileMediaDownloadPatch.kt
-@@ -0,0 +1,271 @@
+@@ -0,0 +1,298 @@
 +package app.crimera.patches.newx.misc.profiledownload
 +
 +import app.crimera.bytecode.Block
@@ -840,7 +892,7 @@
 +        })
 +
 +        val extension = mutableClassDefBy(EXTENSION)
-+        val iconId = getResourceId(ResourceType.DRAWABLE, "ic_vector_arrow_down_circle_stroke")
++        val iconId = getResourceId(ResourceType.DRAWABLE, "ic_vector_arrow_down_circle_stroke").toInt()
 +        extension.bridge("createMenuItem", 6) { method ->
 +            val seed = method.p0Register
 +            checkCast(seed, itemClass.type)
@@ -862,6 +914,30 @@
 +        val numericId = requireExactlyOne("profile user numeric ID", mutableClassDefBy(userIdField.type).fields.filter {
 +            !AccessFlags.STATIC.isSet(it.accessFlags) && it.type == "J"
 +        }).publicField()
++        val accountInterceptor = requireExactlyOne("native account-bound HTTP interceptor", Fingerprint(
++            returnType = "Lokhttp3/Response;",
++            custom = { method, classDef ->
++                method.name == "intercept" && classDef.type.startsWith("Lcom/x/oauth/") &&
++                    classDef.interfaces.contains("Lokhttp3/Interceptor;") &&
++                    classDef.fields.count { !AccessFlags.STATIC.isSet(it.accessFlags) && it.type == userIdField.type } == 1
++            },
++        ).scopedMatchAll()).classDef
++        val accountField = requireExactlyOne("native HTTP account ID field", accountInterceptor.fields.filter {
++            !AccessFlags.STATIC.isSet(it.accessFlags) && it.type == userIdField.type
++        }).publicField()
++        mutableClassDefBy(SESSION).bridge("accountId", 3) { method ->
++            instanceOf(0, method.p0Register, accountInterceptor.type)
++            ifEqz(0, Target.Local("no_profile_account"))
++            checkCast(method.p0Register, accountInterceptor.type)
++            iget(2, method.p0Register, accountField)
++            iget(0, 2, numericId)
++            invokeStatic(methodReference("Ljava/lang/Long;->toString(J)Ljava/lang/String;"), 0, 1)
++            moveResult(0, STRING)
++            returnObject(0)
++            label("no_profile_account")
++            constInt(0, 0)
++            returnObject(0)
++        }
 +        // The stable screenName marker identifies the read even when R8 folds append calls.
 +        val userToString = requireExactlyOne("profile user toString", userClass.methods.filter { it.name == "toString" && it.parameterTypes.isEmpty() })
 +        val screenMarker = requireExactlyOne("profile screenName marker", userToString.code().withIndex().filter {
@@ -885,7 +961,10 @@
 +                }
 +            }
 +        }.distinctBy(FieldReference::toString)
-+        val handleField = requireExactlyOne("profile screenName constructor field", handleFields).publicField()
++        val handleReference = requireExactlyOne("profile screenName constructor field", handleFields)
++        val handleField = requireExactlyOne("profile screenName public field", mutableClassDefBy(userClass.type).fields.filter {
++            it.toString() == handleReference.toString()
++        }).publicField()
 +        extension.bridge("profileId", 3) { method ->
 +            checkCast(method.p0Register, userClass.type)
 +            iget(2, method.p0Register, userIdField)
