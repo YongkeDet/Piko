@@ -52,3 +52,11 @@
 - 直接检查生产控制流：成功原生结束先返回 DONE；无新增计数达到 3 才返回 STOPPED；Session 设置 `protectedStop` 后推进分类，最终提示 `pagination_stopped`，正常结束提示 `completed`；每阶段刷新次数上限为 3。
 
 离线命令使用当前构建的 `patches/build/libs/patches-X.26.10.mpp`，环境设置 `MORPHE_CLI_JAR` 指向 `morphe-desktop-1.11.0-all.jar`、`PIKO_PATCH_OUTPUT` 指向上述测试文件，分别执行 `PATCHER_MAX_HEAP_MB=4096 ./patch-twitter.sh <原始完整APKM>` 与 `PATCHER_MAX_HEAP_MB=512 ./patch-twitter.sh <原始基础APK>`。两个命令均退出 0；没有使用安装参数。
+
+### 正式发布与订阅核验
+
+PR #1 已合并为 `9c04a9f256e59d395b9b4fa3d052fb357a577dd8`，即新标签 `X.26.10` 指向的提交。[主分支 Actions 39928625468](https://github.com/YongkeDet/Piko/actions/runs/39928625468) 的构建、发布及订阅更新全部成功。
+
+[X.26.10 正式发布](https://github.com/YongkeDet/Piko/releases/tag/X.26.10) 的 MPP SHA-256 为 `287f983470435d0b1fcc9ae3120f677cd795d401e02892301cffcdcd7384c9eb`。正式构建与已离线测试 MPP 的 1090 个条目中，仅 `META-INF/MANIFEST.MF` 的 Timestamp 不同；其余 1089 个条目的解压内容及清单其余字段完全相同，包括补丁代码、扩展 DEX 和资源。正式构建的覆盖补丁/翻译哈希已再次核对，四个发布资产的服务端摘要也与下载并验证的构建附件相符。
+
+[固定订阅](https://raw.githubusercontent.com/YongkeDet/Piko/main/patches-bundle.json) 已核验 `version=X.26.10`、下载地址为该正式发布的 `X.26.10.mpp`。X.26.04 的发布 ID、资产 ID 和所有 SHA-256 摘要与更新前一致；两个远程回退分支继续保留。
