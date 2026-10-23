@@ -372,7 +372,7 @@
 +}
 --- /dev/null
 +++ b/extensions/newx/src/main/java/app/morphe/extension/newx/misc/ProfileMediaDownloader.java
-@@ -0,0 +1,278 @@
+@@ -0,0 +1,282 @@
 +package app.morphe.extension.newx.misc;
 +
 +import android.app.Activity;
@@ -496,6 +496,7 @@
 +        int padding = Theme.dpToPx(activity, 20);
 +        body.setPadding(padding, 0, padding, padding);
 +        TextView status = new TextView(activity);
++        status.setTypeface(UpdateFont.customTypefaceOr(android.graphics.Typeface.DEFAULT));
 +        status.setTextSize(15);
 +        status.setTextColor(Theme.primaryText(activity));
 +        body.addView(status);
@@ -635,6 +636,7 @@
 +        }
 +
 +        private void reap() {
++            boolean changed = false;
 +            Iterator<DownloadHandle> iterator = pending.iterator();
 +            while (iterator.hasNext()) {
 +                DownloadHandle.State state = iterator.next().state();
@@ -642,7 +644,9 @@
 +                else if (state == DownloadHandle.State.FAILED) failed++;
 +                else if (state != DownloadHandle.State.CANCELLED) continue;
 +                iterator.remove();
++                changed = true;
 +            }
++            if (changed) refresh();
 +        }
 +    }
 +
