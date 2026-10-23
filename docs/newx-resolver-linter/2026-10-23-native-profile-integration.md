@@ -33,3 +33,9 @@
 - 使用当前提交云端构建 MPP，再通过同一源码的 `patch-twitter.sh` 显式指定输入；不混用旧 MPP。
 
 本地 ECJ/Java 17 编译生产 Pager 与测试，JUnit **20/20 通过**。云端完整构建、resolver 检查和最终离线 APK 结果将在验证后追加。设备行为尚未验证，未安装、启动或控制设备。
+
+### 首轮构建依赖修复
+
+提交 `0f298ea854edfbd0da7f43e970cd6cbf1b9501ac` 的 [Actions 39926398213](https://github.com/YongkeDet/Piko/actions/runs/39926398213) 在 `:patches:compileKotlin` 失败：`ProfileBulkDownloadPatch.kt:12:40 Unresolved reference 'modelFieldsByAppendOrder'`，后续类型推断错误由此派生；Android 扩展 Java 编译、516 条资源、2 项时间线和 20 项分页测试均已通过，未产出 MPP 或执行 APK 补丁。
+
+原因是参考项目额外提供了 `models/BooleanModelLabels.kt`，固定上游中没有该文件。同步改编此辅助函数：按 StringBuilder 追加顺序追踪字段和 R8 静态 helper，拒绝条件控制流、过深嵌套及歧义标签。属于源码依赖遗漏，不是 resolver linter、cardinality helper 或 APK 合同失败。
