@@ -1,0 +1,2083 @@
+--- a/patch-twitter.sh
++++ b/patch-twitter.sh
+@@ -28,7 +28,7 @@
+ fi
+ 
+ DEFAULT_APK="./apks/12.31.0-alpha.02.apk"
+-OUTPUT_APK="$HOME/Downloads/piko-twitter-patched.apk"
++OUTPUT_APK="${PIKO_PATCH_OUTPUT:-$HOME/Downloads/piko-twitter-patched.apk}"
+ APK="$DEFAULT_APK"
+ FLAGS=()
+ for arg in "$@"; do
+@@ -77,6 +77,7 @@
+   -e "NewX: Custom font" \
+   -e "NewX: Custom sharing domain" \
+   -e "NewX: Inline download button" \
++  -e "NewX: Download all profile media" \
+   -e "NewX: Redirect downloads to chosen folder" \
+   -e "NewX: Theme" \
+   -e "NewX: Set default reply sorting" \
+--- a/extensions/newx/src/main/java/app/morphe/extension/newx/misc/InlineDownloadButton.java
++++ b/extensions/newx/src/main/java/app/morphe/extension/newx/misc/InlineDownloadButton.java
+@@ -509,7 +509,7 @@
+         return null;
+     }
+ 
+-    private static String urlKey(String url) {
++    static String urlKey(String url) {
+         if (url == null) return null;
+         int cut = url.length();
+         int query = url.indexOf('?');
+@@ -992,7 +992,7 @@
+      * shown. Photos use the exact twimg size tiers; videos and GIFs use a best-effort variant
+      * policy since the model has no per-variant resolution field.
+      */
+-    private static DownloadItem autoSelectedOption(DownloadItem item) {
++    static DownloadItem autoSelectedOption(DownloadItem item) {
+         if (item == null || item.resolutionOptions.size() <= 1) return null;
+ 
+         if (isImageItem(item)) {
+@@ -1184,7 +1184,25 @@
+             ConflictPolicy policy,
+             boolean explicitResolution
+     ) {
+-        if (!NewXUtils.isHttpUrl(download.url)) return EnqueueState.FAILED;
++        return enqueueDownloadResult(context, download, postContext, username, index, mediaCount,
++                policy, explicitResolution, false).state();
++    }
++
++    /** Batch members retain their own handles and report one aggregate result. */
++    static synchronized EnqueueResult enqueueProfileDownload(
++            Context context, DownloadItem download, DownloadFileName.PostContext postContext,
++            String username, int index, int mediaCount
++    ) {
++        return enqueueDownloadResult(context, download, postContext, username, index, mediaCount,
++                NewXDownloadFolders.conflictPolicy(), false, true);
++    }
++
++    private static EnqueueResult enqueueDownloadResult(
++            Context context, DownloadItem download, DownloadFileName.PostContext postContext,
++            String username, int index, int mediaCount, ConflictPolicy policy, boolean explicitResolution,
++            boolean profileBatch
++    ) {
++        if (!NewXUtils.isHttpUrl(download.url)) return EnqueueResult.failed(new IllegalArgumentException("Invalid media URL"));
+ 
+         final NewXDownloadFolders.MediaKind kind;
+         try {
+@@ -1194,7 +1212,7 @@
+                     () -> "Unsupported NewX download media type: " + download.mimeType,
+                     exception
+             );
+-            return EnqueueState.FAILED;
++            return EnqueueResult.failed(exception);
+         }
+ 
+         String template = DownloadSettings.filenameTemplate();
+@@ -1216,7 +1234,7 @@
+ 
+         DownloadEngine engine = NewXDownloader.get();
+         if (engine == null) {
+-            return EnqueueState.FAILED;
++            return EnqueueResult.failed(new IllegalStateException("Download engine unavailable"));
+         }
+ 
+         final Uri destinationTree = NewXDownloadFolders.treeUri(kind);
+@@ -1238,17 +1256,18 @@
+             );
+         } catch (IllegalArgumentException exception) {
+             NewXLogger.printException(() -> "Invalid NewX download request: " + resolvedFileName, exception);
+-            return EnqueueState.FAILED;
++            return EnqueueResult.failed(exception);
+         }
+ 
+         final EnqueueResult result;
+         synchronized (NewXDownloadFolders.RESERVATION_LOCK) {
++            if (profileBatch) ProfileBulkDownload.markRequest(request);
+             result = engine.enqueue(request);
+         }
+         if (result.state() == EnqueueState.DESTINATION_LOST) {
+             NewXDownloadFolders.invalidate(kind);
+         }
+-        return result.state();
++        return result;
+     }
+ 
+     static String withResolutionSuffix(String fileName, String resolution) {
+--- a/extensions/newx/src/main/java/app/morphe/extension/newx/misc/NewXDownloader.java
++++ b/extensions/newx/src/main/java/app/morphe/extension/newx/misc/NewXDownloader.java
+@@ -150,6 +150,7 @@
+ 
+         @Override
+         public void onCompleted(DownloadEvent.Completed event) {
++            if (ProfileBulkDownload.isBatchRequest(engine.requestFor(event.id()))) return;
+             if (!DownloadNotifications.notificationsEnabled(context, CHANNEL_ID)) {
+                 InlineDownloadButton.reportDownloadStatus("Saved " + event.fileName(), event.label());
+             }
+@@ -169,7 +170,12 @@
+                         NewXLogger.printException(() -> "Could not invalidate lost destination", e);
+                     }
+                 }
+-                InlineDownloadButton.reportDownloadStatus(InlineDownloadButton.FOLDER_LOST_MESSAGE, label);
++                if (!ProfileBulkDownload.isBatchRequest(request)) {
++                    InlineDownloadButton.reportDownloadStatus(InlineDownloadButton.FOLDER_LOST_MESSAGE, label);
++                }
++            } else if (ProfileBulkDownload.isBatchRequest(engine.requestFor(event.id()))) {
++                // The profile progress sheet owns batch results; normal downloads keep their feedback.
++                return;
+             } else if (event.reason() == FailureReason.NO_CONNECTION) {
+                 InlineDownloadButton.reportDownloadStatus("No connection — tap Retry when online", label);
+             } else {
+@@ -181,6 +187,7 @@
+ 
+         @Override
+         public void onCancelled(DownloadEvent.Cancelled event) {
++            if (ProfileBulkDownload.isBatchRequest(engine.requestFor(event.id()))) return;
+             NewXInAppNotification.showForUser("Download cancelled", event.label());
+         }
+     }
+--- a/extensions/newx/src/main/java/app/morphe/extension/newx/misc/ProfilePhotosGallery.java
++++ b/extensions/newx/src/main/java/app/morphe/extension/newx/misc/ProfilePhotosGallery.java
+@@ -27,6 +27,9 @@
+ import app.morphe.extension.crimera.settings.SettingsRegistry;
+ import app.morphe.extension.newx.ui.LoadingIndicatorView;
+ import app.morphe.extension.newx.ui.Theme;
++import app.morphe.extension.newx.ui.IconView;
++import app.morphe.extension.newx.ui.ListItem;
++import app.morphe.extension.shared.StringRef;
+ import app.morphe.extension.newx.utils.NewXUtils;
+ 
+ import kotlin.jvm.functions.Function1;
+@@ -40,6 +43,11 @@
+ 
+     public static boolean isEnabled() {
+         return SettingsRegistry.getBooleanOrDefault(SETTING_ID, true);
++    }
++
++    /** Replaced with the gallery's resolved native wrapper/media getter, without reflection. */
++    public static List<?> getDownloadMedia(Object item) {
++        throw new IllegalStateException("NewX gallery download bridge was not patched");
+     }
+ 
+     private static final Object PENDING_PHOTO_LOCK = new Object();
+@@ -249,6 +257,15 @@
+             content.setOrientation(LinearLayout.VERTICAL);
+             content.setBackgroundColor(Color.TRANSPARENT);
+ 
++            if (ProfileBulkDownload.isEnabled()) {
++                ListItem download = new ListItem(context);
++                download.setTitle(StringRef.str("piko_newx_profile_bulk_button"));
++                download.setLeadingIcon(IconView.IconType.DOWNLOAD, Theme.primaryText(context), null);
++                download.setOnClickListener(view -> ProfileBulkDownload.start(getContext(), this.callback));
++                content.addView(download, new LinearLayout.LayoutParams(
++                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
++            }
++
+             grid = new GalleryGrid(context);
+             grid.setItemClickCallback(itemClickCallback);
+             content.addView(grid, new LinearLayout.LayoutParams(
+@@ -347,6 +364,7 @@
+         }
+ 
+         private void checkLoadMore() {
++            if (ProfileBulkDownload.isRunning()) return;
+             if (loadMoreInFlight || getChildCount() == 0) return;
+             View child = getChildAt(0);
+             int contentHeight = child.getHeight();
+--- /dev/null
++++ b/extensions/newx/src/main/java/app/morphe/extension/newx/misc/ProfileBulkDownload.java
+@@ -0,0 +1,482 @@
++package app.morphe.extension.newx.misc;
++
++import android.app.Activity;
++import android.content.Context;
++import android.os.Handler;
++import android.os.Looper;
++import android.os.SystemClock;
++import android.view.View;
++import android.view.WindowManager;
++import android.widget.LinearLayout;
++import android.widget.TextView;
++
++import java.lang.ref.WeakReference;
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.HashSet;
++import java.util.Iterator;
++import java.util.List;
++import java.util.Set;
++import java.util.WeakHashMap;
++import java.util.concurrent.ExecutorService;
++import java.util.concurrent.Executors;
++
++import app.morphe.extension.crimera.downloader.DownloadHandle;
++import app.morphe.extension.crimera.downloader.EnqueueResult;
++import app.morphe.extension.crimera.downloader.model.DownloadRequest;
++import app.morphe.extension.crimera.settings.SettingsRegistry;
++import app.morphe.extension.crimera.ui.ButtonView;
++import app.morphe.extension.newx.settings.NewXLogger;
++import app.morphe.extension.newx.timeline.NewXTimelineFilter;
++import app.morphe.extension.newx.ui.BottomSheetView;
++import app.morphe.extension.newx.ui.IconView;
++import app.morphe.extension.newx.ui.ListItem;
++import app.morphe.extension.newx.ui.Theme;
++import app.morphe.extension.newx.utils.NewXUtils;
++import app.morphe.extension.newx.utils.ToStringParser;
++import app.morphe.extension.shared.StringRef;
++
++/** Native Photos/Videos controller, adapted from piko-custom with bounded progress and Piko UI. */
++public final class ProfileBulkDownload {
++    private static final String SETTING = "newx.post_actions_media.profile_bulk";
++    private static volatile Session active;
++    private static final List<RawPage> RAW_PAGES = new ArrayList<>();
++    private static final List<ComponentBinding> COMPONENTS = new ArrayList<>();
++    private static final ThreadLocal<List<?>> PENDING_PAGE = new ThreadLocal<>();
++    private static final Set<DownloadRequest> REQUESTS = Collections.newSetFromMap(new WeakHashMap<>());
++
++    private ProfileBulkDownload() { }
++
++    public static boolean isEnabled() {
++        return SettingsRegistry.getBooleanOrDefault(SETTING, false);
++    }
++
++    public static boolean isRunning() { return active != null; }
++
++    /** Native Success constructor hook: downloads must not autoplay the Videos tab behind the dialog. */
++    public static boolean allowAutoplay(Object timelineType, boolean allowed) {
++        if (!allowed || active == null || !(timelineType instanceof Enum<?> kind)) return allowed;
++        return !kind.name().equals("USER_PROFILE_PHOTOS") && !kind.name().equals("USER_PROFILE_VIDEOS");
++    }
++
++    static synchronized void markRequest(DownloadRequest request) { REQUESTS.add(request); }
++    static synchronized boolean isBatchRequest(DownloadRequest request) { return REQUESTS.contains(request); }
++
++    /** The UI callback captures a child URT component, while tab selection belongs to its parent. */
++    public static synchronized void bindComponent(Object child, Object owner) {
++        if (child == null || owner == null || child == owner) return;
++        COMPONENTS.removeIf(binding -> binding.child.get() == null || binding.owner.get() == null
++                || binding.child.get() == child);
++        COMPONENTS.add(new ComponentBinding(child, owner));
++    }
++
++    static synchronized Object ownerOf(Object component) {
++        COMPONENTS.removeIf(binding -> binding.child.get() == null || binding.owner.get() == null);
++        for (ComponentBinding binding : COMPONENTS) {
++            if (binding.child.get() == component) return binding.owner.get();
++        }
++        return component;
++    }
++
++    private static final class ComponentBinding {
++        final WeakReference<Object> child;
++        final WeakReference<Object> owner;
++        ComponentBinding(Object child, Object owner) {
++            this.child = new WeakReference<>(child);
++            this.owner = new WeakReference<>(owner);
++        }
++    }
++
++    /** Preserve the raw media for each live native Success instance before display filtering. */
++    public static void rememberPage(Object type, Object raw, Object filtered) {
++        PENDING_PAGE.remove();
++        if (!isEnabled() || raw == filtered || !(raw instanceof List<?> source)
++                || !(filtered instanceof List<?>) || !(type instanceof Enum<?> kind)) return;
++        String name = kind.name();
++        if (!name.equals("USER_PROFILE_PHOTOS") && !name.equals("USER_PROFILE_VIDEOS")) return;
++        PENDING_PAGE.set(source);
++    }
++
++    /** Called at the constructor return, after the native Success instance is initialized. */
++    public static synchronized void attachPage(Object success) {
++        List<?> source = PENDING_PAGE.get();
++        PENDING_PAGE.remove();
++        if (source == null) return;
++        RAW_PAGES.removeIf(page -> page.success.get() == null || page.success.get() == success);
++        RAW_PAGES.add(new RawPage(success, source));
++    }
++
++    /** Native copies that retain the exact items list must retain its unfiltered lineage too. */
++    public static synchronized void inheritPage(Object source, Object copy, List<?> before, List<?> after) {
++        if (before != after) return;
++        // A replacement input can itself filter down to the same shared empty list. Its own
++        // freshly captured raw page is authoritative and must not be overwritten by the source.
++        if (itemsBeforeFilters(copy, after) != after) return;
++        List<?> raw = itemsBeforeFilters(source, before);
++        if (raw == before) return;
++        RAW_PAGES.removeIf(page -> page.success.get() == null || page.success.get() == copy);
++        RAW_PAGES.add(new RawPage(copy, raw));
++    }
++
++    static synchronized List<?> itemsBeforeFilters(Object success, List<?> visible) {
++        RAW_PAGES.removeIf(page -> page.success.get() == null);
++        for (int i = RAW_PAGES.size() - 1; i >= 0; i--) {
++            RawPage page = RAW_PAGES.get(i);
++            if (page.success.get() == success) return page.raw;
++        }
++        return visible;
++    }
++
++    private static final class RawPage {
++        final WeakReference<Object> success;
++        final List<?> raw;
++        RawPage(Object success, List<?> raw) { this.success = new WeakReference<>(success); this.raw = raw; }
++    }
++
++    public static void start(Context context, Object callback) {
++        Activity activity = NewXUtils.findUsableActivity(context);
++        if (activity == null || !isEnabled()) return;
++        Session running = active;
++        if (running != null) { running.sheet.show(); return; }
++        try {
++            Object component = componentOf(callback);
++            List<?> tabs = availableTabs(component);
++            Object photos = null, videos = null;
++            if (tabs != null) for (Object tab : tabs) {
++                if (tab instanceof Enum<?> value) {
++                    if (value.name().equals("Photos")) photos = tab;
++                    if (value.name().equals("Videos")) videos = tab;
++                }
++            }
++            if (photos == null && videos == null) { NewXInAppNotification.show(text("unavailable")); return; }
++            showChoices(activity, component, photos, videos);
++        } catch (RuntimeException error) {
++            NewXLogger.printException(() -> "Cannot open native profile download", error);
++            NewXInAppNotification.show(text("read_failed"));
++        }
++    }
++
++    private static void showChoices(Activity activity, Object component, Object photos, Object videos) {
++        BottomSheetView choices = new BottomSheetView(activity).setTitle(text("button"))
++                .setSubtitle(text("description"));
++        LinearLayout body = new LinearLayout(activity);
++        body.setOrientation(LinearLayout.VERTICAL);
++        String[] labels = {"all", "images", "videos"};
++        IconView.IconType[] icons = {IconView.IconType.DOWNLOAD, IconView.IconType.IMAGE, IconView.IconType.VIDEO};
++        for (int i = 0; i < labels.length; i++) {
++            final int kind = i;
++            ListItem row = new ListItem(activity);
++            row.setTitle(text(labels[i]));
++            row.setLeadingIcon(icons[i], Theme.primaryText(activity), null);
++            boolean available = kind == 0 ? photos != null && videos != null : kind == 1 ? photos != null : videos != null;
++            row.setEnabled(available);
++            row.setAlpha(available ? 1f : 0.4f);
++            row.setOnClickListener(view -> {
++                choices.dismiss();
++                new Handler(Looper.getMainLooper()).post(() -> begin(activity, component, photos, videos, kind));
++            });
++            body.addView(row);
++        }
++        choices.setScrollableBodyView(body).show();
++    }
++
++    private static void begin(Activity activity, Object component, Object photos, Object videos, int kind) {
++        if (active != null) { active.sheet.show(); return; }
++        boolean imagesMissing = kind != 2 && !NewXDownloadFolders.isConfigured(activity, NewXDownloadFolders.MediaKind.IMAGES);
++        boolean videosMissing = kind != 1 && !NewXDownloadFolders.isConfigured(activity, NewXDownloadFolders.MediaKind.VIDEOS);
++        if (imagesMissing || videosMissing) {
++            NewXInAppNotification.show(text("folder_required"));
++            NewXDownloadFolders.choose(activity, imagesMissing ? NewXDownloadFolders.MediaKind.IMAGES : NewXDownloadFolders.MediaKind.VIDEOS);
++            return;
++        }
++        try {
++            Session session = new Session(activity, component, photos, videos, kind);
++            active = session;
++            session.begin();
++        } catch (RuntimeException error) {
++            NewXLogger.printException(() -> "Cannot start native profile download", error);
++            Session session = active;
++            if (session != null) session.stop("read_failed");
++            else NewXInAppNotification.show(text("read_failed"));
++        }
++    }
++
++    private static final class Session {
++        final Activity activity;
++        final Context context;
++        final Object component, originalTab, photos, videos;
++        final int kind;
++        final Handler main = new Handler(Looper.getMainLooper());
++        final ExecutorService worker = Executors.newSingleThreadExecutor();
++        final Set<String> mediaKeys = new HashSet<>(), phaseKeys = new HashSet<>();
++        final List<DownloadHandle> transfers = new ArrayList<>();
++        final BottomSheetView sheet;
++        final TextView status;
++        final ButtonView cancel, close;
++        ProfileBulkPager pager = new ProfileBulkPager(SystemClock.elapsedRealtime());
++        Object desiredTab;
++        volatile boolean stopped;
++        volatile int saved, skipped, failed, unavailable, discovered;
++        boolean processing, recovering, finished, protectedStop;
++        String endReason;
++        int pages;
++
++        Session(Activity activity, Object component, Object photos, Object videos, int kind) {
++            this.activity = activity;
++            this.context = activity.getApplicationContext();
++            this.component = component;
++            this.originalTab = selectedTab(component);
++            this.photos = photos;
++            this.videos = videos;
++            this.kind = kind;
++            this.desiredTab = kind == 2 ? videos : photos;
++            sheet = new BottomSheetView(activity).setTitle(text("button")).setSubtitle(text("keep_open"));
++            LinearLayout body = new LinearLayout(activity);
++            body.setOrientation(LinearLayout.VERTICAL);
++            int padding = Theme.dpToPx(activity, 20);
++            body.setPadding(padding, 0, padding, padding);
++            status = new TextView(activity);
++            status.setTypeface(UpdateFont.customTypefaceOr(android.graphics.Typeface.DEFAULT));
++            status.setTextColor(Theme.primaryText(activity));
++            status.setTextSize(15);
++            body.addView(status);
++            sheet.setBodyView(body).setCanceledOnTouchOutside(false);
++            cancel = new ButtonView(activity, ButtonView.ButtonStyle.TONAL, text("cancel"));
++            cancel.setOnClickListener(view -> stop("cancelled"));
++            sheet.addButton(cancel);
++            close = new ButtonView(activity, ButtonView.ButtonStyle.FILLED, text("close"));
++            close.setVisibility(View.GONE);
++            close.setOnClickListener(view -> sheet.dismiss());
++            sheet.addButton(close);
++            sheet.getDialog().setOnDismissListener(ignored -> { if (!finished) stop("cancelled"); });
++        }
++
++        void begin() {
++            sheet.show();
++            if (sheet.getDialog().getWindow() != null) sheet.getDialog().getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
++            selectTab(component, desiredTab);
++            updateProgress();
++            main.post(this::tick);
++        }
++
++        void tick() {
++            if (finished) return;
++            if (activity.isDestroyed() || activity.isFinishing()) { stop("cancelled"); return; }
++            updateProgress();
++            if (stopped) { if (!processing) finish(); return; }
++            if (processing) { main.postDelayed(this::tick, 500); return; }
++            try {
++                if (selectedTab(component) != desiredTab) { stop("tab_changed"); return; }
++                List<?> items = currentItems(component);
++                Object[] snapshot = pagingSnapshot(component);
++                if (snapshot == null || snapshot.length != 6) throw new IllegalStateException("Missing native paging state");
++                String cursor = (String) snapshot[3];
++                ProfileBulkPager.Network network = ProfileBulkPager.Network.read(snapshot[4]);
++                ProfileBulkPager.Step step = pager.step(SystemClock.elapsedRealtime(), items,
++                        Boolean.TRUE.equals(snapshot[0]), Boolean.TRUE.equals(snapshot[1]),
++                        Boolean.TRUE.equals(snapshot[2]), cursor, network, Boolean.TRUE.equals(snapshot[5]));
++                switch (step) {
++                    case PROCESS -> {
++                        recovering = false;
++                        processing = true;
++                        worker.execute(() -> process(items, cursor));
++                    }
++                    case NEXT, RETRY -> {
++                        recovering = step == ProfileBulkPager.Step.RETRY;
++                        pager.requested(cursor, SystemClock.elapsedRealtime(), network);
++                        requestNext(component);
++                    }
++                    case REFRESH -> {
++                        recovering = true;
++                        // Refresh intentionally rereads old pages; only pagination progress resets.
++                        phaseKeys.clear();
++                        pager.refreshed(SystemClock.elapsedRealtime(), cursor, network);
++                        refresh(component);
++                    }
++                    case STOPPED -> { protectedStop = true; advancePhase(); if (finished) return; }
++                    case DONE -> { advancePhase(); if (finished) return; }
++                    case FAILED -> {
++                        NewXLogger.printInfo(() -> "Profile pagination stopped: " + pager.failure()
++                                + ", HTTP=" + pager.failureStatus() + ", attempts=" + pager.attempts());
++                        stop(switch (pager.failure()) {
++                            case ACCESS -> "access_failed";
++                            case RATE_LIMIT -> "rate_limited";
++                            case CURSOR_LOOP -> "cursor_stalled";
++                            case NETWORK -> "network_failed";
++                            case TIMEOUT -> "timed_out";
++                            case NONE -> "read_failed";
++                        });
++                        return;
++                    }
++                    case WAIT -> { }
++                }
++            } catch (RuntimeException error) {
++                NewXLogger.printException(() -> "Native profile pagination stopped", error);
++                stop("read_failed");
++                return;
++            }
++            main.postDelayed(this::tick, 500);
++        }
++
++        void advancePhase() {
++            if (kind == 0 && desiredTab == photos) {
++                desiredTab = videos;
++                phaseKeys.clear();
++                pager = new ProfileBulkPager(SystemClock.elapsedRealtime());
++                selectTab(component, videos);
++            } else {
++                endReason = protectedStop ? "pagination_stopped" : "completed";
++                finish();
++            }
++        }
++
++        void process(List<?> items, String cursor) {
++            boolean progressed = false;
++            try {
++                for (Object item : NewXTimelineFilter.mediaItemsForProfileDownload(items)) {
++                    if (stopped) break;
++                    try {
++                        List<?> media = ProfilePhotosGallery.getDownloadMedia(item);
++                        if (media == null || media.isEmpty()) continue;
++                        DownloadFileName.PostContext post = DownloadFileName.PostContext.from(item);
++                        for (int index = 0; index < media.size() && !stopped; index++) {
++                            Object raw = media.get(index);
++                            List<InlineDownloadButton.DownloadItem> parsed = InlineDownloadButton.downloadItems(Collections.singletonList(raw));
++                            InlineDownloadButton.DownloadItem download = parsed.isEmpty() ? null : parsed.get(0);
++                            String candidate = candidateKey(raw, download, post, index);
++                            boolean newCandidate = candidate != null && phaseKeys.add(candidate);
++                            progressed |= newCandidate;
++                            if (download == null) { if (newCandidate) unavailable++; continue; }
++                            boolean image = download.mimeType.startsWith("image/");
++                            if (kind == 1 && !image || kind == 2 && image) continue;
++                            String key = InlineDownloadButton.urlKey(download.url);
++                            if (!mediaKeys.add(key)) continue;
++                            discovered++;
++                            drain(false);
++                            if (stopped) break;
++                            InlineDownloadButton.DownloadItem chosen = InlineDownloadButton.autoSelectedOption(download);
++                            if (chosen == null) chosen = download;
++                            EnqueueResult result = InlineDownloadButton.enqueueProfileDownload(context, chosen, post,
++                                    post.screenName, index, media.size());
++                            switch (result.state()) {
++                                case QUEUED -> {
++                                    synchronized (transfers) { transfers.add(result.handle()); }
++                                    if (stopped) result.handle().cancel();
++                                }
++                                case SKIPPED -> skipped++;
++                                case FAILED -> failed++;
++                                case DESTINATION_LOST -> { failed++; endReason = "folder_required"; stopped = true; }
++                            }
++                        }
++                    } catch (RuntimeException error) {
++                        failed++;
++                        NewXLogger.printException(() -> "Cannot read one profile media item", error);
++                    }
++                }
++                drain(true);
++            } catch (RuntimeException error) {
++                NewXLogger.printException(() -> "Profile downloads stopped", error);
++                endReason = "read_failed";
++                stopped = true;
++                cancelTransfers();
++            } finally {
++                final boolean newMedia = progressed;
++                main.post(() -> {
++                    processing = false;
++                    pages++;
++                    pager.processed(items, cursor, SystemClock.elapsedRealtime(), newMedia);
++                    if (stopped) finish();
++                });
++            }
++        }
++
++        void drain(boolean all) {
++            while (true) {
++                int remaining;
++                synchronized (transfers) {
++                    Iterator<DownloadHandle> iterator = transfers.iterator();
++                    while (iterator.hasNext()) {
++                        DownloadHandle handle = iterator.next();
++                        switch (handle.state()) {
++                            case COMPLETED -> { saved++; iterator.remove(); }
++                            case FAILED -> { failed++; iterator.remove(); }
++                            case CANCELLED -> iterator.remove();
++                            case QUEUED, RUNNING -> { }
++                        }
++                    }
++                    remaining = transfers.size();
++                }
++                if (stopped) { cancelTransfers(); return; }
++                if (remaining == 0 || !all && remaining < 4) return;
++                try { Thread.sleep(200); }
++                catch (InterruptedException error) { Thread.currentThread().interrupt(); stopped = true; endReason = "cancelled"; }
++            }
++        }
++
++        void cancelTransfers() {
++            synchronized (transfers) { for (DownloadHandle handle : transfers) handle.cancel(); }
++        }
++
++        void stop(String reason) {
++            if (finished) return;
++            endReason = reason;
++            stopped = true;
++            cancelTransfers();
++            if (!processing) finish();
++        }
++
++        String summary() {
++            String state = finished ? text(endReason == null ? "cancelled" : endReason)
++                    : text("progress", text(desiredTab == photos ? "photos_phase" : "videos_phase"), pages, discovered);
++            if (!finished && recovering) state += "\n" + text("retry_progress", pager.attempts());
++            return state + "\n\n" + text("result_counts", saved, skipped, failed, unavailable);
++        }
++
++        void updateProgress() { status.setText(summary()); }
++
++        void finish() {
++            if (finished || processing) return;
++            finished = true;
++            main.removeCallbacksAndMessages(null);
++            worker.shutdown();
++            active = null;
++            try { selectTab(component, originalTab); }
++            catch (RuntimeException error) { NewXLogger.printException(() -> "Cannot restore profile tab", error); }
++            cancel.setVisibility(View.GONE);
++            close.setVisibility(View.VISIBLE);
++            if (sheet.getDialog().getWindow() != null) sheet.getDialog().getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
++            updateProgress();
++            NewXInAppNotification.show(summary());
++        }
++    }
++
++    private static String candidateKey(Object raw, InlineDownloadButton.DownloadItem download,
++                                       DownloadFileName.PostContext post, int index) {
++        String value = raw == null ? "" : raw.toString();
++        String id = ToStringParser.fieldValue(value, "mediaId");
++        if (id == null) id = ToStringParser.fieldValue(value, "mediaKey");
++        if (id != null) return "id:" + id;
++        if (download != null) return "url:" + InlineDownloadButton.urlKey(download.url);
++        return post.id == null ? null : "post:" + post.id + ":" + index;
++    }
++
++    private static String text(String suffix, Object... arguments) {
++        String value = StringRef.str("piko_newx_profile_bulk_" + suffix);
++        return arguments.length == 0 ? value : String.format(java.util.Locale.getDefault(), value, arguments);
++    }
++
++    private static boolean matchesTimeline(Object timelineType, Object tab) {
++        if (!(timelineType instanceof Enum<?> kind) || !(tab instanceof Enum<?> selected)) return false;
++        return selected.name().equals("Photos") && kind.name().equals("USER_PROFILE_PHOTOS")
++                || selected.name().equals("Videos") && kind.name().equals("USER_PROFILE_VIDEOS");
++    }
++    private static IllegalStateException unpatched() { return new IllegalStateException("Profile download bridge was not patched"); }
++    private static Object componentOf(Object callback) { throw unpatched(); }
++    private static List<?> availableTabs(Object component) { throw unpatched(); }
++    private static Object selectedTab(Object component) { throw unpatched(); }
++    private static void selectTab(Object component, Object tab) { throw unpatched(); }
++    private static List<?> currentItems(Object component) { throw unpatched(); }
++    private static Object[] pagingSnapshot(Object component) { throw unpatched(); }
++    private static void requestNext(Object component) { throw unpatched(); }
++    private static void refresh(Object component) { throw unpatched(); }
++}
+--- /dev/null
++++ b/extensions/newx/src/main/java/app/morphe/extension/newx/misc/ProfileBulkPager.java
+@@ -0,0 +1,208 @@
++package app.morphe.extension.newx.misc;
++
++import app.morphe.extension.newx.utils.ToStringParser;
++
++import java.util.HashSet;
++import java.util.Objects;
++import java.util.Set;
++
++/** Consumes native pages, including Empty; cached failures are not results of our next request. */
++final class ProfileBulkPager {
++    enum Step { WAIT, PROCESS, NEXT, RETRY, REFRESH, DONE, STOPPED, FAILED }
++    enum Failure { NONE, NETWORK, TIMEOUT, CURSOR_LOOP, ACCESS, RATE_LIMIT }
++    enum Kind { NONE, FETCHING, SUCCESS, FAILURE }
++    static final class Network {
++        static final Network NONE = new Network(null, Kind.NONE, 0);
++        final Object token;
++        final Kind kind;
++        final int status;
++        Network(Object token, Kind kind, int status) {
++            this.token = token;
++            this.kind = kind;
++            this.status = status;
++        }
++        static Network read(Object event) {
++            if (event == null) return NONE;
++            String value = event.toString();
++            Kind kind = value.startsWith("Failure(requestType=") ? Kind.FAILURE
++                    : value.startsWith("Success(requestType=") ? Kind.SUCCESS
++                    : value.startsWith("Fetching(requestType=") ? Kind.FETCHING : Kind.NONE;
++            int status = 0;
++            if (kind == Kind.FAILURE) {
++                String code = ToStringParser.fieldValue(value, "httpStatus");
++                if (code != null) try { status = Integer.parseInt(code); }
++                catch (NumberFormatException ignored) { }
++            }
++            return new Network(event, kind, status);
++        }
++    }
++
++    private static final long TIMEOUT_MS = 45_000;
++    private static final long BUSY_TIMEOUT_MS = 120_000;
++    private static final long BOOTSTRAP_MS = 10_000;
++    private static final long SETTLE_MS = 1_000;
++    private static final int MAX_ATTEMPTS = 3;
++    private static final int MAX_PAGES_WITHOUT_NEW_MEDIA = 3;
++    private final Set<String> requested = new HashSet<>();
++    private Object processedItems;
++    private String processedCursor;
++    private boolean processed;
++    private boolean awaiting;
++    private boolean refreshing;
++    private String requestCursor;
++    private Object requestEvent;
++    private int attempts;
++    private int refreshPasses;
++    private long lastProgress;
++    private long retryAt = -1;
++    private long stableSince = -1;
++    private String stableCursor;
++    private Object stableItems;
++    private boolean stableTerminated;
++    private Failure failure = Failure.NONE;
++    private int failureStatus;
++    private boolean observed;
++    private Object initialEvent;
++    private int pagesWithoutNewMedia;
++    private String budgetCursor;
++    private boolean processedSuccessfulPage;
++
++    ProfileBulkPager(long now) { lastProgress = now; }
++    Failure failure() { return failure; }
++    int failureStatus() { return failureStatus; }
++    int attempts() { return attempts; }
++
++    Step step(long now, Object items, boolean canPage, boolean terminated, boolean loading,
++              String cursor, Network network, boolean backingOff) {
++        long elapsed = now - lastProgress;
++        if (!observed) {
++            observed = true;
++            initialEvent = network.token;
++        }
++        boolean failed = network.kind == Kind.FAILURE;
++        boolean freshFailure = failed && network.token != initialEvent;
++        if (freshFailure && (network.status == 401 || network.status == 403 || network.status == 404)) {
++            return fail(Failure.ACCESS, network.status);
++        }
++        if (freshFailure && network.status == 429) return fail(Failure.RATE_LIMIT, 429);
++        if (loading || network.kind == Kind.FETCHING || backingOff) {
++            stableSince = -1;
++            return elapsed >= BUSY_TIMEOUT_MS ? fail(Failure.TIMEOUT, 0) : Step.WAIT;
++        }
++        // A successful NO_CURSOR is an end marker; an initial/cached blank state is not.
++        terminated = terminated || network.kind == Kind.SUCCESS && cursor == null && !canPage;
++        if (awaiting) {
++            boolean freshEvent = network.token != requestEvent;
++            if (failed && freshEvent) return recover(now, cursor, Failure.NETWORK, network.status);
++            boolean advanced = !failed && (!Objects.equals(cursor, requestCursor) || terminated);
++            if (refreshing) advanced = freshEvent && network.kind == Kind.SUCCESS;
++            if (!advanced) {
++                // A repeated successful cursor is not proof of completion. Do consume a late
++                // new list, then fail closed if its next cursor is still one already requested.
++                if (freshEvent && network.kind == Kind.SUCCESS && items != null && items != processedItems) {
++                    advanced = true;
++                } else if (elapsed >= TIMEOUT_MS) {
++                    return network.kind == Kind.SUCCESS && freshEvent
++                            ? fail(Failure.CURSOR_LOOP, 0) : recover(now, cursor, Failure.TIMEOUT, 0);
++                } else return Step.WAIT;
++            }
++        }
++        if (items == null) {
++            stableSince = -1;
++            return failed ? recover(now, cursor, Failure.NETWORK, network.status)
++                    : elapsed >= BOOTSTRAP_MS ? recover(now, cursor, Failure.TIMEOUT, 0) : Step.WAIT;
++        }
++        if (stableSince < 0 || !Objects.equals(stableCursor, cursor) ||
++                stableItems != items || stableTerminated != terminated) {
++            stableSince = now;
++            stableCursor = cursor;
++            stableItems = items;
++            stableTerminated = terminated;
++            return elapsed >= BUSY_TIMEOUT_MS ? fail(Failure.TIMEOUT, 0) : Step.WAIT;
++        }
++        if (now - stableSince < SETTLE_MS) return Step.WAIT;
++        if (awaiting) {
++            awaiting = false;
++            refreshing = false;
++            attempts = 0;
++            retryAt = -1;
++            lastProgress = now;
++        }
++        if (!processed || processedItems != items || !Objects.equals(processedCursor, cursor)) {
++            processedSuccessfulPage = network.kind == Kind.SUCCESS;
++            return Step.PROCESS;
++        }
++        // A cached failure can coexist with usable cached media/cursor. Save those media first,
++        // then retry through the native dispatcher even though it currently says !canPage.
++        if (failed) return recover(now, cursor, Failure.NETWORK, network.status);
++        if (terminated) return Step.DONE;
++        // This is a protection stop, distinct from native proof of completion.
++        if (pagesWithoutNewMedia >= MAX_PAGES_WITHOUT_NEW_MEDIA) return Step.STOPPED;
++        if (!canPage || cursor == null) {
++            return elapsed >= BOOTSTRAP_MS ? recover(now, cursor, Failure.TIMEOUT, 0) : Step.WAIT;
++        }
++        return requested.contains(cursor) ? fail(Failure.CURSOR_LOOP, 0) : Step.NEXT;
++    }
++
++    private Step recover(long now, String cursor, Failure reason, int status) {
++        if (attempts >= MAX_ATTEMPTS || cursor == null && refreshPasses >= MAX_ATTEMPTS) {
++            Failure result = status == 429 ? Failure.RATE_LIMIT
++                    : status == 401 || status == 403 || status == 404 ? Failure.ACCESS : reason;
++            return fail(result, status);
++        }
++        if (retryAt < 0) retryAt = now + (attempts + 1L) * 1_500;
++        if (now < retryAt) return Step.WAIT;
++        return cursor == null ? Step.REFRESH : Step.RETRY;
++    }
++
++    private Step fail(Failure reason, int status) {
++        failure = reason;
++        failureStatus = status;
++        return Step.FAILED;
++    }
++
++    void processed(Object items, String cursor, long now) {
++        processed(items, cursor, now, true);
++    }
++
++    void processed(Object items, String cursor, long now, boolean newMedia) {
++        processed = true;
++        processedItems = items;
++        processedCursor = cursor;
++        lastProgress = now;
++        if (newMedia) pagesWithoutNewMedia = 0;
++        else if (processedSuccessfulPage && cursor != null && !Objects.equals(cursor, budgetCursor)) {
++            pagesWithoutNewMedia++;
++        }
++        if (processedSuccessfulPage) budgetCursor = cursor;
++    }
++
++    void requested(String cursor, long now, Network network) {
++        attempts = awaiting && !refreshing && Objects.equals(cursor, requestCursor) ? attempts + 1 : 1;
++        requested.add(cursor);
++        awaiting = true;
++        refreshing = false;
++        requestCursor = cursor;
++        requestEvent = network.token;
++        lastProgress = now;
++        retryAt = -1;
++        stableSince = -1;
++    }
++
++    void refreshed(long now, String cursor, Network network) {
++        refreshPasses++;
++        pagesWithoutNewMedia = 0;
++        budgetCursor = null;
++        attempts = awaiting && refreshing ? attempts + 1 : 1;
++        // Native refresh starts from the top. Session URL deduplication keeps files unique.
++        requested.clear();
++        processed = false;
++        awaiting = true;
++        refreshing = true;
++        requestCursor = cursor;
++        requestEvent = network.token;
++        lastProgress = now;
++        retryAt = -1;
++        stableSince = -1;
++    }
++}
+--- a/extensions/newx/src/main/java/app/morphe/extension/newx/timeline/NewXTimelineFilter.java
++++ b/extensions/newx/src/main/java/app/morphe/extension/newx/timeline/NewXTimelineFilter.java
+@@ -1,6 +1,8 @@
+ package app.morphe.extension.newx.timeline;
+ 
+ import java.util.ArrayList;
++import java.util.ArrayDeque;
++import java.util.IdentityHashMap;
+ import java.util.Collections;
+ import java.util.HashSet;
+ import java.util.List;
+@@ -120,6 +122,40 @@
+     }
+ 
+     /** Applies all selected timeline filters in one traversal of the immutable item tree. */
++    public static Object filterTimelineItems(Object timelineType, Object timelineItems) {
++        Object filtered = filterTimelineItems(timelineItems);
++        app.morphe.extension.newx.misc.ProfileBulkDownload.rememberPage(timelineType, timelineItems, filtered);
++        return filtered;
++    }
++
++    /** Keep nested media modules in profile batches, using the already resolved model access. */
++    public static List<?> mediaItemsForProfileDownload(List<?> items) {
++        return mediaItemsForProfileDownload(items, PRODUCTION_MODEL_ACCESS);
++    }
++
++    static List<?> mediaItemsForProfileDownload(List<?> items, TimelineModelAccess models) {
++        List<Object> result = new ArrayList<>();
++        ArrayDeque<Object> pending = new ArrayDeque<>();
++        Set<Object> visited = Collections.newSetFromMap(new IdentityHashMap<>());
++        for (int index = items.size() - 1; index >= 0; index--) {
++            if (items.get(index) != null) pending.addFirst(items.get(index));
++        }
++        while (!pending.isEmpty()) {
++            Object item = pending.removeFirst();
++            if (!visited.add(item)) continue;
++            if (models.isModuleItem(item)) {
++                Object child = models.getModuleItem(item);
++                if (child != null) pending.addFirst(child);
++            } else if (models.isModule(item)) {
++                List<?> children = models.getModuleChildren(item);
++                if (children == null) continue;
++                for (int index = children.size() - 1; index >= 0; index--) {
++                    if (children.get(index) != null) pending.addFirst(children.get(index));
++                }
++            } else result.add(item);
++        }
++        return result;
++    }
+     public static Object filterTimelineItems(Object timelineItems) {
+         if (timelineItems == null) return null;
+ 
+--- /dev/null
++++ b/extensions/newx/src/test/java/app/morphe/extension/newx/misc/ProfileBulkPagerTest.java
+@@ -0,0 +1,306 @@
++package app.morphe.extension.newx.misc;
++
++import static app.morphe.extension.newx.misc.ProfileBulkPager.Step.*;
++import static app.morphe.extension.newx.misc.ProfileBulkPager.Failure.*;
++import static org.junit.Assert.assertEquals;
++
++import java.util.Collections;
++import org.junit.Test;
++
++/** Real regressions: native Empty tabs, cached failures, lost bootstrap and bounded retries. */
++public final class ProfileBulkPagerTest {
++    private static final ProfileBulkPager.Network IDLE = ProfileBulkPager.Network.NONE;
++    private static ProfileBulkPager.Network event(String value) {
++        return ProfileBulkPager.Network.read(new String(value));
++    }
++    private static ProfileBulkPager.Network success() {
++        return event("Success(requestType=OLDER_THAN, cursor=null, durationMs=100)");
++    }
++    private static ProfileBulkPager.Network failure(int status) {
++        return event("Failure(requestType=OLDER_THAN, cursor=null, throwable=null, httpStatus=" + status + ")");
++    }
++    private static ProfileBulkPager.Step step(ProfileBulkPager p, long now, Object items,
++            boolean canPage, boolean end, String cursor, ProfileBulkPager.Network event) {
++        return p.step(now, items, canPage, end, false, cursor, event, false);
++    }
++
++    @Test public void finalPageMustBeProcessedBeforeCompletion() {
++        ProfileBulkPager p = new ProfileBulkPager(0);
++        Object first = new Object(), last = new Object();
++        assertEquals(WAIT, step(p, 0, first, true, false, "one", IDLE));
++        assertEquals(PROCESS, step(p, 1000, first, true, false, "one", IDLE));
++        p.processed(first, "one", 1000);
++        assertEquals(NEXT, step(p, 1001, first, true, false, "one", IDLE));
++        p.requested("one", 1001, IDLE);
++        assertEquals(WAIT, step(p, 1500, last, false, true, "end", IDLE));
++        assertEquals(PROCESS, step(p, 2500, last, false, true, "end", IDLE));
++        p.processed(last, "end", 2500);
++        assertEquals(DONE, step(p, 2501, last, false, true, "end", IDLE));
++    }
++
++    @Test public void emptyIntermediatePageWithNewCursorContinues() {
++        ProfileBulkPager p = new ProfileBulkPager(0);
++        Object empty = Collections.emptyList();
++        p.processed(empty, "one", 0);
++        p.requested("one", 1, IDLE);
++        assertEquals(WAIT, step(p, 100, empty, true, false, "two", IDLE));
++        assertEquals(PROCESS, step(p, 1100, empty, true, false, "two", IDLE));
++        p.processed(empty, "two", 1100);
++        assertEquals(NEXT, step(p, 1101, empty, true, false, "two", IDLE));
++    }
++
++    @Test public void nativeEmptyAfterSuccessfulFetchCompletesInsteadOfTimingOut() {
++        ProfileBulkPager p = new ProfileBulkPager(0);
++        Object empty = Collections.emptyList();
++        ProfileBulkPager.Network ok = success();
++        assertEquals(WAIT, step(p, 0, null, false, false, null, IDLE));
++        assertEquals(WAIT, step(p, 100, empty, false, false, null, ok));
++        assertEquals(PROCESS, step(p, 1100, empty, false, false, null, ok));
++        p.processed(empty, null, 1100);
++        assertEquals(DONE, step(p, 1101, empty, false, false, null, ok));
++    }
++
++    @Test public void cachedEmptyWithoutSuccessfulFetchIsRefreshedAndNeverFalselyCompleted() {
++        ProfileBulkPager p = new ProfileBulkPager(0);
++        Object empty = Collections.emptyList();
++        assertEquals(WAIT, step(p, 0, empty, false, false, null, IDLE));
++        assertEquals(PROCESS, step(p, 1000, empty, false, false, null, IDLE));
++        p.processed(empty, null, 1000);
++        assertEquals(WAIT, step(p, 11000, empty, false, false, null, IDLE));
++        assertEquals(REFRESH, step(p, 12500, empty, false, false, null, IDLE));
++    }
++
++    @Test public void cachedFailureDoesNotAbortAndItsSameEventIsNotAResponseToRetry() {
++        ProfileBulkPager p = new ProfileBulkPager(0);
++        Object items = new Object();
++        ProfileBulkPager.Network old = failure(503);
++        assertEquals(WAIT, step(p, 0, items, false, false, "one", old));
++        assertEquals(PROCESS, step(p, 1000, items, false, false, "one", old));
++        p.processed(items, "one", 1000);
++        assertEquals(WAIT, step(p, 1001, items, false, false, "one", old));
++        assertEquals(RETRY, step(p, 2501, items, false, false, "one", old));
++        p.requested("one", 2501, old);
++        assertEquals(WAIT, step(p, 3000, items, false, false, "one", old));
++        ProfileBulkPager.Network ok = success();
++        Object next = new Object();
++        assertEquals(WAIT, step(p, 4000, next, true, false, "two", ok));
++        assertEquals(PROCESS, step(p, 5000, next, true, false, "two", ok));
++        p.processed(next, "two", 5000);
++        assertEquals(NEXT, step(p, 5001, next, true, false, "two", ok));
++    }
++
++    @Test public void newFailuresRetryAtMostThreeAttemptsEvenWithOldTerminationFlag() {
++        ProfileBulkPager p = new ProfileBulkPager(0);
++        Object items = new Object();
++        step(p, 0, items, true, false, "one", IDLE);
++        p.processed(items, "one", 0);
++        p.requested("one", 1, IDLE);
++        ProfileBulkPager.Network first = failure(503), second = failure(502), third = failure(503);
++        assertEquals(WAIT, step(p, 10, items, false, true, "one", first));
++        assertEquals(RETRY, step(p, 3010, items, false, true, "one", first));
++        p.requested("one", 3010, first);
++        assertEquals(WAIT, step(p, 3020, items, false, true, "one", second));
++        assertEquals(RETRY, step(p, 7520, items, false, true, "one", second));
++        p.requested("one", 7520, second);
++        assertEquals(FAILED, step(p, 7530, items, false, true, "one", third));
++        assertEquals(NETWORK, p.failure());
++        assertEquals(3, p.attempts());
++    }
++
++    @Test public void freshAccessDenialAndRateLimitStopWithoutMoreRequests() {
++        for (int status : new int[]{401, 403, 404, 429}) {
++            ProfileBulkPager p = new ProfileBulkPager(0);
++            Object items = new Object();
++            step(p, 0, items, true, false, "one", IDLE);
++            p.processed(items, "one", 0);
++            p.requested("one", 1, IDLE);
++            assertEquals(FAILED, step(p, 2, items, false, false, "one", failure(status)));
++            assertEquals(status == 429 ? RATE_LIMIT : ACCESS, p.failure());
++            assertEquals(status, p.failureStatus());
++        }
++    }
++
++    @Test public void historicalAccessErrorCanBeRecheckedOnceRatherThanBlockingEveryNewTask() {
++        ProfileBulkPager p = new ProfileBulkPager(0);
++        ProfileBulkPager.Network old = failure(403);
++        assertEquals(WAIT, step(p, 0, null, false, false, null, old));
++        assertEquals(REFRESH, step(p, 1500, null, false, false, null, old));
++        p.refreshed(1500, null, old);
++        assertEquals(WAIT, step(p, 2000, null, false, false, null, old));
++        assertEquals(FAILED, step(p, 2500, null, false, false, null, failure(403)));
++        assertEquals(ACCESS, p.failure());
++    }
++
++    @Test public void missingFirstPageBootstrapsWithNativeRefreshButHasFiniteAttempts() {
++        ProfileBulkPager p = new ProfileBulkPager(0);
++        assertEquals(WAIT, step(p, 10000, null, false, false, null, IDLE));
++        assertEquals(REFRESH, step(p, 11500, null, false, false, null, IDLE));
++        p.refreshed(11500, null, IDLE);
++        assertEquals(WAIT, step(p, 56500, null, false, false, null, IDLE));
++        assertEquals(REFRESH, step(p, 59500, null, false, false, null, IDLE));
++        p.refreshed(59500, null, IDLE);
++        assertEquals(WAIT, step(p, 104500, null, false, false, null, IDLE));
++        assertEquals(REFRESH, step(p, 109000, null, false, false, null, IDLE));
++        p.refreshed(109000, null, IDLE);
++        assertEquals(FAILED, step(p, 154000, null, false, false, null, IDLE));
++        assertEquals(TIMEOUT, p.failure());
++    }
++
++    @Test public void refreshWaitsForNewSuccessAndCanFinishAnEmptyVideoTab() {
++        ProfileBulkPager p = new ProfileBulkPager(0);
++        ProfileBulkPager.Network old = failure(503);
++        Object empty = Collections.emptyList();
++        step(p, 0, empty, false, false, null, old);
++        p.refreshed(10, null, old);
++        assertEquals(WAIT, step(p, 1000, empty, false, false, null, old));
++        ProfileBulkPager.Network ok = success();
++        assertEquals(WAIT, step(p, 1500, empty, false, false, null, ok));
++        assertEquals(PROCESS, step(p, 2500, empty, false, false, null, ok));
++        p.processed(empty, null, 2500);
++        assertEquals(DONE, step(p, 2501, empty, false, false, null, ok));
++    }
++
++    @Test public void nativeLoadingFetchingAndBackoffAreNotEndMarkers() {
++        Object items = Collections.emptyList();
++        for (int mode = 0; mode < 3; mode++) {
++            ProfileBulkPager p = new ProfileBulkPager(0);
++            ProfileBulkPager.Network event = mode == 1
++                    ? event("Fetching(requestType=OLDER_THAN, cursor=null)") : success();
++            assertEquals(WAIT, p.step(45000, items, false, false, mode == 0, null, event, mode == 2));
++            assertEquals(FAILED, p.step(120000, items, false, false, mode == 0, null, event, mode == 2));
++            assertEquals(TIMEOUT, p.failure());
++        }
++    }
++
++    @Test public void cyclicCursorStopsInsteadOfDownloadingForever() {
++        ProfileBulkPager p = new ProfileBulkPager(0);
++        Object items = new Object();
++        p.processed(items, "one", 0);
++        p.requested("one", 1, IDLE);
++        assertEquals(WAIT, step(p, 10, items, true, false, "two", IDLE));
++        assertEquals(PROCESS, step(p, 1010, items, true, false, "two", IDLE));
++        p.processed(items, "two", 1010);
++        p.requested("two", 1011, IDLE);
++        assertEquals(WAIT, step(p, 2000, items, true, false, "one", IDLE));
++        assertEquals(PROCESS, step(p, 3000, items, true, false, "one", IDLE));
++        p.processed(items, "one", 3000);
++        assertEquals(FAILED, step(p, 3001, items, true, false, "one", IDLE));
++        assertEquals(CURSOR_LOOP, p.failure());
++    }
++
++    @Test public void lateTimelineEmissionResetsSettlingBeforeTheFinalDrain() {
++        ProfileBulkPager p = new ProfileBulkPager(0);
++        Object old = new Object(), last = new Object();
++        p.processed(old, "one", 0);
++        p.requested("one", 10, IDLE);
++        assertEquals(WAIT, step(p, 100, old, false, true, "end", IDLE));
++        assertEquals(WAIT, step(p, 800, last, false, true, "end", IDLE));
++        assertEquals(WAIT, step(p, 1100, last, false, true, "end", IDLE));
++        assertEquals(PROCESS, step(p, 1800, last, false, true, "end", IDLE));
++    }
++
++    @Test public void changingListsCannotKeepTheTaskWaitingForever() {
++        ProfileBulkPager p = new ProfileBulkPager(0);
++        assertEquals(WAIT, step(p, 119999, new Object(), true, false, "one", IDLE));
++        assertEquals(FAILED, step(p, 120000, new Object(), true, false, "one", IDLE));
++        assertEquals(TIMEOUT, p.failure());
++    }
++
++    private static long consume(ProfileBulkPager p, long now, Object items, String cursor,
++            ProfileBulkPager.Network network, boolean newMedia, boolean canPage, boolean end) {
++        assertEquals(WAIT, step(p, now, items, canPage, end, cursor, network));
++        now += 1000;
++        assertEquals(PROCESS, step(p, now, items, canPage, end, cursor, network));
++        p.processed(items, cursor, now, newMedia);
++        return now;
++    }
++
++    @Test public void successfulRotatingEmptyOrDuplicatePagesStopWithoutClaimingNativeCompletion() {
++        for (boolean copyList : new boolean[]{false, true}) {
++            ProfileBulkPager p = new ProfileBulkPager(0);
++            Object empty = Collections.emptyList();
++            long now = 0;
++            for (int page = 0; page < 3; page++) {
++                Object items = copyList ? new java.util.ArrayList<>() : empty;
++                String cursor = "rotating-" + page;
++                ProfileBulkPager.Network network = success();
++                now = consume(p, now, items, cursor, network, false, true, false);
++                assertEquals(page == 2 ? STOPPED : NEXT, step(p, now, items, true, false, cursor, network));
++                assertEquals(NONE, p.failure());
++                if (page < 2) p.requested(cursor, now + 1, network);
++                now += 2000;
++            }
++        }
++    }
++
++    @Test public void newCandidatesResetProtectionBeforeTypeSelectionOrFileSkipping() {
++        ProfileBulkPager p = new ProfileBulkPager(0);
++        long now = 0;
++        Object items = new Object();
++        for (int page = 0; page < 6; page++) {
++            String cursor = "page-" + page;
++            ProfileBulkPager.Network network = success();
++            now = consume(p, now, items, cursor, network, page == 2, true, false);
++            assertEquals(page == 5 ? STOPPED : NEXT, step(p, now, items, true, false, cursor, network));
++            if (page < 5) p.requested(cursor, now + 1, network);
++            now += 2000;
++        }
++    }
++
++    @Test public void copiesOfTheSameLogicalPageDoNotSpendTheEmptyPageBudget() {
++        ProfileBulkPager p = new ProfileBulkPager(0);
++        ProfileBulkPager.Network network = success();
++        long now = 0;
++        for (int copy = 0; copy < 6; copy++) {
++            Object items = new Object();
++            now = consume(p, now, items, "same-cursor", network, false, true, false);
++            assertEquals(NEXT, step(p, now, items, true, false, "same-cursor", network));
++            now += 2000;
++        }
++    }
++
++    @Test public void explicitNativeEndWinsOverTheProtectionThresholdAfterTheLastPage() {
++        ProfileBulkPager p = new ProfileBulkPager(0);
++        Object items = new Object();
++        long now = 0;
++        for (int page = 0; page < 3; page++) {
++            boolean end = page == 2;
++            String cursor = "cursor-" + page;
++            ProfileBulkPager.Network network = success();
++            now = consume(p, now, items, cursor, network, false, !end, end);
++            assertEquals(end ? DONE : NEXT, step(p, now, items, !end, end, cursor, network));
++            if (!end) p.requested(cursor, now + 1, network);
++            now += 2000;
++        }
++    }
++
++    @Test public void successfulRefreshesCannotResetTheWholePhaseRecoveryLimitForever() {
++        ProfileBulkPager p = new ProfileBulkPager(0);
++        long now = 0;
++        for (int pass = 0; pass < 3; pass++) {
++            p.refreshed(now, null, IDLE);
++            Object items = new Object();
++            ProfileBulkPager.Network network = success();
++            now = consume(p, now, items, "refresh-" + pass, network, true, true, false);
++            now += 2000;
++        }
++        assertEquals(FAILED, step(p, now, null, false, false, null, failure(503)));
++        assertEquals(NETWORK, p.failure());
++    }
++
++    @Test public void staleFailureAndStaleTerminationCannotResetRetryAttempts() {
++        ProfileBulkPager p = new ProfileBulkPager(0);
++        Object items = new Object();
++        ProfileBulkPager.Network old = failure(503);
++        step(p, 0, items, false, true, "one", old);
++        p.processed(items, "one", 0);
++        p.requested("one", 1, old);
++        assertEquals(WAIT, step(p, 1001, items, false, true, "one", old));
++        assertEquals(WAIT, step(p, 45001, items, false, true, "one", old));
++        assertEquals(RETRY, step(p, 48001, items, false, true, "one", old));
++        p.requested("one", 48001, old);
++        assertEquals(2, p.attempts());
++        assertEquals(WAIT, step(p, 49001, items, false, true, "one", old));
++        assertEquals(2, p.attempts());
++    }
++}
+--- /dev/null
++++ b/patches/src/main/kotlin/app/crimera/patches/newx/misc/mediatab/ProfileBulkDownloadPatch.kt
+@@ -0,0 +1,471 @@
++package app.crimera.patches.newx.misc.mediatab
++
++import app.crimera.bytecode.Block
++import app.crimera.bytecode.RegisterLimit
++import app.crimera.bytecode.Target
++import app.crimera.bytecode.fieldReference
++import app.crimera.bytecode.insertHook
++import app.crimera.bytecode.methodReference
++import app.crimera.patches.common.requireExactlyOne
++import app.crimera.patches.newx.misc.inlineactions.newXInlineDownloadButtonPatch
++import app.crimera.patches.newx.models.fieldForToStringLabel
++import app.crimera.patches.newx.models.modelFieldsByAppendOrder
++import app.crimera.patches.newx.models.requirePublicFields
++import app.crimera.patches.newx.settings.Categories
++import app.crimera.patches.newx.settings.newXToggle
++import app.crimera.patches.newx.timeline.NewXTimelineSuccessFingerprint
++import app.crimera.patches.newx.timeline.newXTimelineFilterPatch
++import app.crimera.patches.newx.utils.Constants.COMPATIBILITY_PROFILE_DOWNLOAD
++import app.crimera.patches.settings.settingStrings
++import app.crimera.patches.utils.scopedMatchAll
++import app.morphe.patcher.extensions.InstructionExtensions.removeInstruction
++import app.morphe.patcher.patch.BytecodePatchContext
++import app.morphe.patcher.patch.PatchException
++import app.morphe.patcher.patch.bytecodePatch
++import app.morphe.patcher.util.proxy.mutableTypes.MutableMethod
++import app.morphe.util.cloneMutable
++import app.morphe.util.getReference
++import app.morphe.util.p0Register
++import app.morphe.util.registersUsed
++import com.android.tools.smali.dexlib2.AccessFlags
++import com.android.tools.smali.dexlib2.Opcode
++import com.android.tools.smali.dexlib2.iface.ClassDef
++import com.android.tools.smali.dexlib2.iface.Method
++import com.android.tools.smali.dexlib2.iface.instruction.OneRegisterInstruction
++import com.android.tools.smali.dexlib2.iface.instruction.TwoRegisterInstruction
++import com.android.tools.smali.dexlib2.iface.reference.FieldReference
++import com.android.tools.smali.dexlib2.iface.reference.MethodReference
++import com.android.tools.smali.dexlib2.iface.reference.StringReference
++import com.android.tools.smali.dexlib2.iface.reference.TypeReference
++
++private const val EXTENSION = "Lapp/morphe/extension/newx/misc/ProfileBulkDownload;"
++private const val OBJECT = "Ljava/lang/Object;"
++private const val LIST = "Ljava/util/List;"
++
++private fun Method.parameters() = parameterTypes.map(CharSequence::toString)
++private fun Method.readFields() = implementation?.instructions?.toList().orEmpty().mapNotNull {
++    it.getReference<FieldReference>().takeIf { _ -> it.opcode == Opcode.IGET_OBJECT }
++}.distinctBy(FieldReference::toString)
++
++/** A coroutine can capture the same field; only a component exposes it as a paging getter. */
++internal fun resolveBulkTimelineHost(
++    classes: List<ClassDef>, paginatorType: String, pagingContract: String,
++): ClassDef = requireExactlyOne("NewX bulk URT host", classes.filter { cls ->
++    cls.type.startsWith("Lcom/x/urt/") && cls.fields.any { it.type == paginatorType } &&
++        cls.methods.any { method ->
++            !AccessFlags.STATIC.isSet(method.accessFlags) && method.parameterTypes.isEmpty() &&
++                method.returnType == pagingContract && method.readFields().any { it.type == paginatorType }
++        }
++})
++
++/** Native data objects keep their semantic labels when R8 renames owners and fields. */
++internal fun resolveBulkSingleton(classes: List<ClassDef>, contract: String, label: String): FieldReference =
++    requireExactlyOne("NewX bulk native $label object", classes.filter { cls ->
++        contract in cls.interfaces && cls.methods.any { method ->
++            method.name == "toString" && method.parameterTypes.isEmpty() &&
++                method.returnType == "Ljava/lang/String;" &&
++                method.implementation?.instructions?.any {
++                    it.getReference<StringReference>()?.string == label
++                } == true
++        }
++    }.flatMap { cls -> cls.fields.filter { field ->
++        AccessFlags.STATIC.isSet(field.accessFlags) && field.type == cls.type
++    } })
++
++/** All unstable native contracts are resolved here; the Java worker knows no R8 identities. */
++@Suppress("unused")
++val newXProfileBulkDownloadPatch = bytecodePatch(
++    name = "NewX: Download all profile media",
++    description = "Downloads every accessible photo and video from a profile, with pagination, progress and cancellation.",
++) {
++    compatibleWith(COMPATIBILITY_PROFILE_DOWNLOAD)
++    dependsOn(newXProfilePhotosGalleryPatch, newXInlineDownloadButtonPatch, newXTimelineFilterPatch)
++    newXToggle(
++        id = "newx.post_actions_media.profile_bulk",
++        category = Categories.POST_ACTIONS_MEDIA,
++        strings = settingStrings("piko_newx_profile_bulk"),
++        order = 106,
++        defaultValue = true,
++    )
++    execute {
++        val classes = buildList<ClassDef> { classDefForEach { add(it) } }
++        val byType = classes.associateBy { it.type.toString() }
++        val paging = resolvePagingEvent(classes)
++        val pagingContract = requireExactlyOne("NewX bulk paging interface", byType[paging.paginatorType]!!.interfaces.filter {
++            it.startsWith("Lcom/x/urt/paging/") &&
++                byType[it.toString()]?.let { cls -> AccessFlags.INTERFACE.isSet(cls.accessFlags) } == true
++        }).toString()
++        val nativeHost = resolveBulkTimelineHost(classes, paging.paginatorType, pagingContract)
++        val bottom = requireExactlyOne("NewX bulk bottom paginator getter", nativeHost.methods.filter { method ->
++            method.parameterTypes.isEmpty() && method.returnType == pagingContract &&
++                method.readFields().any { it.type == paging.paginatorType }
++        })
++        val hostInterface = requireExactlyOne("NewX bulk URT interface", nativeHost.interfaces.mapNotNull {
++            byType[it.toString()]
++        }.filter { cls -> cls.methods.any { it.name == bottom.name && it.parameters() == bottom.parameters() } })
++        val stateGetter = requireExactlyOne("NewX bulk timeline state getter", nativeHost.methods.filter {
++            it.parameterTypes.isEmpty() && !AccessFlags.STATIC.isSet(it.accessFlags) &&
++                isStateFlowInterface(it.returnType.toString(), byType)
++        })
++        val stateValue = resolveStateValueGetter(stateGetter.returnType.toString(), byType)
++        val stateInterfaceGetter = requireExactlyOne("NewX bulk timeline interface getter", hostInterface.methods.filter {
++            it.name == stateGetter.name && it.parameters() == stateGetter.parameters()
++        })
++        val bottomInterfaceGetter = requireExactlyOne("NewX bulk bottom interface getter", hostInterface.methods.filter {
++            it.name == bottom.name && it.parameters() == bottom.parameters()
++        })
++        val callback = requireExactlyOne("NewX bulk gallery callback capture", classes.filter { cls ->
++            cls.type.startsWith("Lcom/x/urt/ui/") &&
++                cls.interfaces.any { it == "Lkotlin/jvm/functions/Function1;" } &&
++                cls.fields.any { it.type == hostInterface.type }
++        })
++        val callbackField = requireExactlyOne("NewX bulk callback component field", callback.fields.filter {
++            it.type == hostInterface.type && !AccessFlags.STATIC.isSet(it.accessFlags)
++        })
++        val eventDispatch = requireExactlyOne("NewX bulk timeline event dispatch", callback.methods.flatMap { method ->
++            method.implementation?.instructions?.mapNotNull { instruction ->
++                instruction.getReference<MethodReference>()?.takeIf { call ->
++                    call.definingClass == hostInterface.type && call.returnType == "V" &&
++                        call.parameterTypes.size == 1 &&
++                        call.parameterTypes.single().startsWith("Lcom/x/urt/")
++                }
++            }.orEmpty()
++        }.distinctBy(MethodReference::toString))
++        val refreshEvent = resolveBulkSingleton(classes, eventDispatch.parameterTypes.single().toString(), "RefreshTimeline")
++        val combinedConstructor = requireExactlyOne("NewX bulk combined media component", classes.filter {
++            it.type.startsWith("Lcom/x/profile/timeline/")
++        }.flatMap { cls -> cls.methods.filter { method ->
++            val parameters = method.parameters()
++            val tab = parameters.getOrNull(1)?.let(byType::get)
++            method.name == "<init>" && parameters.getOrNull(0) == LIST &&
++                tab?.superclass == "Ljava/lang/Enum;" &&
++                tab.fields.any { it.name == "Photos" } && tab.fields.any { it.name == "Videos" }
++        } })
++        val combined = byType[combinedConstructor.definingClass]!!
++        val tabType = combinedConstructor.parameters().getOrNull(1)
++            ?: throw PatchException("NewX bulk selected tab parameter missing")
++        val controller = requireExactlyOne("NewX bulk profile tab controller", combined.interfaces.mapNotNull {
++            byType[it.toString()]
++        }.filter { cls -> cls.type.startsWith("Lcom/x/profile/timeline/") && cls.methods.any {
++            it.parameters() == listOf(tabType) && it.returnType == "V"
++        } })
++        val select = requireExactlyOne("NewX bulk native tab selection", controller.methods.filter {
++            it.parameters() == listOf(tabType) && it.returnType == "V"
++        })
++        // Reuse the native tab-switch pause operation. Switching to Videos behind a progress
++        // dialog must not start playback while a profile is being downloaded.
++        val pause = requireExactlyOne("NewX bulk native autoplay pause", combined.methods.filter {
++            it.parameters() == listOf(tabType) && it.returnType == "V"
++        }.flatMap { method -> method.implementation?.instructions?.mapNotNull {
++            it.getReference<MethodReference>()?.takeIf { call ->
++                call.definingClass.startsWith("Lcom/x/media/autoplay/") &&
++                    call.parameterTypes.map(CharSequence::toString) == listOf("Z") && call.returnType == "V"
++            }
++        }.orEmpty() }.distinctBy(MethodReference::toString))
++        val autoplay = requireExactlyOne("NewX bulk autoplay controller getter", hostInterface.methods.filter {
++            it.parameterTypes.isEmpty() && it.returnType == pause.definingClass
++        })
++        // The profile renderer passes A(tab, sorting)'s child URT component to the timeline UI,
++        // not the combined parent. Bind the native child-creation/cache-return operation to its
++        // parent so callback lookup cannot guess the last opened account.
++        val creator = requireExactlyOne("NewX bulk profile child component creator", combined.methods.filter { method ->
++            method.parameters() == listOf(tabType, "Z") && method.returnType == hostInterface.type &&
++                method.implementation?.instructions?.any { instruction ->
++                    instruction.getReference<MethodReference>()?.returnType == nativeHost.type
++                } == true
++        })
++        val mutableCreator = requireExactlyOne("NewX bulk mutable profile child creator", mutableClassDefBy(combined.type).methods.filter {
++            it.name == creator.name && it.parameters() == creator.parameters()
++        })
++        val childReturns = mutableCreator.implementation!!.instructions.toList().withIndex().filter {
++            it.value.opcode == Opcode.RETURN_OBJECT
++        }
++        if (childReturns.isEmpty()) throw PatchException("NewX bulk child creator has no object return")
++        childReturns.sortedByDescending { it.index }.forEach { exit ->
++            val childRegister = (exit.value as OneRegisterInstruction).registerA
++            mutableCreator.insertHook(exit.index,
++                excludedRegisters = listOf(childRegister, mutableCreator.p0Register), relocateBranchTargets = true) {
++                val child = scratchRegister(RegisterLimit.FOUR_BIT)
++                val owner = scratchRegister(RegisterLimit.FOUR_BIT)
++                move(child, childRegister, OBJECT)
++                move(owner, mutableCreator.p0Register, OBJECT)
++                invokeStatic(methodReference("$EXTENSION->bindComponent($OBJECT$OBJECT)V"), child, owner)
++            }
++        }
++        val tabs = requireExactlyOne("NewX bulk available tabs", combined.fields.filter {
++            !AccessFlags.STATIC.isSet(it.accessFlags) && it.type == LIST
++        })
++        // Follow the field -> getValue -> result -> cast-to-tab chain in the native current-
++        // component getter. The constructor's boolean seed may already have been rewritten by
++        // the default-post-sorting patch, so it is deliberately not a discovery anchor here.
++        val currentComponent = requireExactlyOne("NewX bulk selected child component getter", combined.methods.filter { method ->
++            method.parameterTypes.isEmpty() && method.returnType == hostInterface.type &&
++                method.implementation?.instructions?.any { instruction ->
++                    instruction.opcode == Opcode.CHECK_CAST && instruction.getReference<TypeReference>()?.type == tabType
++                } == true
++        })
++        val selected = requireExactlyOne("NewX bulk selected tab state field", listOf(currentComponent).flatMap { method ->
++            val code = method.implementation?.instructions?.toList().orEmpty()
++            code.withIndex().mapNotNull { (index, cast) ->
++                if (cast.opcode != Opcode.CHECK_CAST || cast.getReference<TypeReference>()?.type != tabType) {
++                    return@mapNotNull null
++                }
++                val result = code.getOrNull(index - 1)
++                val call = code.getOrNull(index - 2)
++                val read = code.getOrNull(index - 3)
++                val ref = call?.getReference<MethodReference>()
++                val field = read?.getReference<FieldReference>()
++                field?.takeIf {
++                    read?.opcode == Opcode.IGET_OBJECT && ref?.name == "getValue" &&
++                        ref.parameterTypes.isEmpty() && ref.returnType == OBJECT &&
++                        field.definingClass == combined.type &&
++                        result?.opcode == Opcode.MOVE_RESULT_OBJECT &&
++                        (result as? OneRegisterInstruction)?.registerA == (cast as? OneRegisterInstruction)?.registerA &&
++                        call?.registersUsed?.toList() == listOf((read as TwoRegisterInstruction).registerA)
++                }
++            }
++        }.distinctBy(FieldReference::toString))
++        val success = requireExactlyOne("NewX bulk timeline success", NewXTimelineSuccessFingerprint.scopedMatchAll())
++        val stateContract = requireExactlyOne("NewX bulk timeline state contract", success.originalClassDef.interfaces.toList())
++        val emptyState = resolveBulkSingleton(classes, stateContract, "Empty")
++        val successToString = requireExactlyOne("NewX bulk success labels", success.originalClassDef.methods.filter {
++            it.name == "toString" && it.parameterTypes.isEmpty()
++        })
++        val items = successToString.fieldForToStringLabel(", timelineItems=")
++        val timelineType = successToString.fieldForToStringLabel("Success(timelineType=")
++        val autoplayAllowed = successToString.fieldForToStringLabel(", isAutoPlayAllowed=")
++        val constructor = success.method
++        val autoplayStore = requireExactlyOne("NewX bulk autoplay permission store", constructor.implementation!!.instructions
++            .toList().withIndex().filter { (_, instruction) ->
++                instruction.opcode == Opcode.IPUT_BOOLEAN &&
++                    instruction.getReference<FieldReference>()?.toString() == autoplayAllowed.toString()
++            })
++        val autoplayRegister = (autoplayStore.value as TwoRegisterInstruction).registerA
++        if (autoplayRegister != constructor.p0Register + 4) {
++            throw PatchException("NewX bulk autoplay flag is no longer the constructor boolean parameter")
++        }
++        constructor.insertHook(autoplayStore.index, relocateBranchTargets = true) {
++            invokeStatic(methodReference("$EXTENSION->allowAutoplay(${OBJECT}Z)Z"),
++                constructor.p0Register + 1, autoplayRegister)
++            moveResult(autoplayRegister, "Z")
++        }
++        val successOwner = mutableClassDefBy(success.originalClassDef.type)
++        val copy = requireExactlyOne("NewX bulk native Success copy", successOwner.methods.filter { method ->
++            AccessFlags.STATIC.isSet(method.accessFlags) && method.returnType == successOwner.type &&
++                method.parameters().getOrNull(0) == successOwner.type &&
++                method.parameterTypes.any { it == items.type } &&
++                method.implementation?.instructions?.any { instruction ->
++                    instruction.getReference<MethodReference>()?.let {
++                        it.name == "<init>" && it.definingClass == successOwner.type
++                    } == true
++                } == true
++        })
++        val copyReturn = requireExactlyOne("NewX bulk Success copy return", copy.implementation!!.instructions
++            .toList().withIndex().filter { it.value.opcode == Opcode.RETURN_OBJECT })
++        val copiedRegister = (copyReturn.value as OneRegisterInstruction).registerA
++        copy.insertHook(copyReturn.index, excludedRegisters = listOf(copy.p0Register, copiedRegister),
++            relocateBranchTargets = true) {
++            val before = scratchRegister(RegisterLimit.FOUR_BIT)
++            val after = scratchRegister(RegisterLimit.FOUR_BIT)
++            iget(before, copy.p0Register, items)
++            iget(after, copiedRegister, items)
++            invokeStatic(methodReference("$EXTENSION->inheritPage($OBJECT$OBJECT$LIST$LIST)V"),
++                copy.p0Register, copiedRegister, before, after)
++        }
++        val pagingStateClass = byType[paging.state.stateType]!!
++        val pagingToString = requireExactlyOne("NewX bulk paginator labels", pagingStateClass.methods.filter {
++            it.name == "toString" && it.parameterTypes.isEmpty()
++        })
++        val labels = modelFieldsByAppendOrder(pagingToString) { ref ->
++            byType[ref.definingClass]?.methods?.let { methods ->
++                requireExactlyOne("NewX bulk model-label helper $ref", methods.filter {
++                    it.name == ref.name && it.parameters() == ref.parameterTypes.map(CharSequence::toString) &&
++                        it.returnType == ref.returnType
++                })
++            }
++        }
++        fun field(label: String) = labels[label]
++            ?: throw PatchException("NewX bulk paginator field missing: $label")
++        val loading = field(", isLoading=")
++        val backingOff = field(", isBackingOff=")
++        val cursor = field(", cursorToUseForLoad=")
++        val fetchEvent = field(", lastKnownTimelineNetworkFetchEvent=")
++        fun labelsOf(type: String) = requireExactlyOne("NewX bulk model labels $type", byType[type]!!.methods.filter {
++            it.name == "toString" && it.parameterTypes.isEmpty()
++        })
++        val cursorModel = labelsOf(cursor.type).fieldForToStringLabel("UrtTimelineCursor(timelineCursor=")
++        val cursorValue = labelsOf(cursorModel.type).fieldForToStringLabel(", value=")
++        if (cursorValue.type != "Ljava/lang/String;") throw PatchException("NewX bulk cursor value is no longer a string")
++        listOf(callbackField, tabs, selected, items, timelineType, loading, backingOff, cursor, fetchEvent,
++            cursorModel, cursorValue).groupBy { it.definingClass }.forEach {
++            (owner, fields) -> mutableClassDefBy(owner).requirePublicFields(fields)
++        }
++
++        replaceBulkBridge("componentOf") { method ->
++            instanceOf(0, method.p0Register, callback.type)
++            ifEqz(0, Target.Local("missing"))
++            move(0, method.p0Register, OBJECT)
++            checkCast(0, callback.type)
++            iget(0, 0, callbackField)
++            invokeStatic(methodReference("$EXTENSION->ownerOf($OBJECT)$OBJECT"), 0)
++            moveResult(0, OBJECT)
++            returnObject(0)
++            label("missing")
++            constInt(0, 0)
++            returnObject(0)
++        }
++        replaceBulkBridge("availableTabs") { method ->
++            instanceOf(0, method.p0Register, combined.type)
++            ifEqz(0, Target.Local("missing"))
++            move(0, method.p0Register, OBJECT)
++            checkCast(0, combined.type)
++            iget(0, 0, tabs)
++            returnObject(0)
++            label("missing")
++            constInt(0, 0)
++            returnObject(0)
++        }
++        replaceBulkBridge("selectedTab") { method ->
++            move(0, method.p0Register, OBJECT)
++            checkCast(0, combined.type)
++            iget(0, 0, selected)
++            invoke(stateValue.opcode, methodReference(stateValue.descriptor), listOf(0))
++            moveResult(0, OBJECT)
++            returnObject(0)
++        }
++        replaceBulkBridge("selectTab") { method ->
++            move(0, method.p0Register, OBJECT)
++            move(1, method.p0Register + 1, OBJECT)
++            checkCast(0, controller.type)
++            checkCast(1, tabType)
++            invokeInterface(methodReference(select.toString()), 0, 1)
++            checkCast(0, hostInterface.type)
++            invokeInterface(methodReference(autoplay.toString()), 0)
++            moveResult(0, OBJECT)
++            constInt(1, 0)
++            invokeVirtual(pause, 0, 1)
++            returnVoid()
++        }
++        replaceBulkBridge("currentItems") { method ->
++            move(0, method.p0Register, OBJECT)
++            checkCast(0, combined.type)
++            // Read the selected native child's live flow. The parent's derived stateIn may
++            // have no subscribers because the profile renderer composes the child directly.
++            invokeVirtual(methodReference(currentComponent.toString()), 0)
++            moveResult(0, OBJECT)
++            invokeInterface(methodReference(stateInterfaceGetter.toString()), 0)
++            moveResult(0, OBJECT)
++            invoke(stateValue.opcode, methodReference(stateValue.descriptor), listOf(0))
++            moveResult(0, OBJECT)
++            // Empty is a real completed native state, not a missing/Loading Success. The pager
++            // still requires a successful fetch/end marker before declaring this tab done.
++            instanceOf(1, 0, emptyState.definingClass)
++            ifEqz(1, Target.Local("success"))
++            invokeStatic(methodReference("Ljava/util/Collections;->emptyList()$LIST"))
++            moveResult(0, LIST)
++            returnObject(0)
++            label("success")
++            instanceOf(1, 0, success.originalClassDef.type)
++            ifEqz(1, Target.Local("missing"))
++            checkCast(0, success.originalClassDef.type)
++            iget(1, 0, timelineType)
++            move(2, method.p0Register, OBJECT)
++            checkCast(2, combined.type)
++            iget(2, 2, selected)
++            invoke(stateValue.opcode, methodReference(stateValue.descriptor), listOf(2))
++            moveResult(2, OBJECT)
++            invokeStatic(methodReference("$EXTENSION->matchesTimeline($OBJECT$OBJECT)Z"), 1, 2)
++            moveResult(1, "Z")
++            ifEqz(1, Target.Local("missing"))
++            iget(1, 0, items)
++            invokeStatic(methodReference("$EXTENSION->itemsBeforeFilters($OBJECT$LIST)$LIST"), 0, 1)
++            moveResult(0, LIST)
++            returnObject(0)
++            label("missing")
++            constInt(0, 0)
++            returnObject(0)
++        }
++        fun Block.readPaginator(method: MutableMethod) {
++            move(0, method.p0Register, OBJECT)
++            checkCast(0, hostInterface.type)
++            invokeInterface(methodReference(bottomInterfaceGetter.toString()), 0)
++            moveResult(0, OBJECT)
++            checkCast(0, paging.paginatorType)
++        }
++        replaceBulkBridge("pagingSnapshot") { method ->
++            readPaginator(method)
++            val state = paging.state
++            invoke(state.stateFlowGetter.opcode, methodReference(state.stateFlowGetter.descriptor), listOf(0))
++            moveResult(0, OBJECT)
++            invoke(state.stateValueGetter.opcode, methodReference(state.stateValueGetter.descriptor), listOf(0))
++            moveResult(0, OBJECT)
++            checkCast(0, state.stateType)
++            constInt(1, 6)
++            newArray(2, 1, "[Ljava/lang/Object;")
++            listOf(state.needsMore, state.terminated).forEachIndexed { index, call ->
++                invoke(call.opcode, methodReference(call.descriptor), listOf(0))
++                moveResult(3, "Z")
++                invokeStatic(methodReference("Ljava/lang/Boolean;->valueOf(Z)Ljava/lang/Boolean;"), 3)
++                moveResult(3, OBJECT)
++                constInt(1, index)
++                aputObject(3, 2, 1)
++            }
++            iget(3, 0, loading)
++            invokeStatic(methodReference("Ljava/lang/Boolean;->valueOf(Z)Ljava/lang/Boolean;"), 3)
++            moveResult(3, OBJECT)
++            constInt(1, 2)
++            aputObject(3, 2, 1)
++            // Wrapper toString includes sort/scribe metadata; use the server cursor value as
++            // request identity so metadata changes cannot disguise a repeated cursor.
++            iget(3, 0, cursor)
++            ifEqz(3, Target.Local("cursor_ready"))
++            iget(3, 3, cursorModel)
++            ifEqz(3, Target.Local("cursor_ready"))
++            iget(3, 3, cursorValue)
++            label("cursor_ready")
++            constInt(1, 3)
++            aputObject(3, 2, 1)
++            iget(3, 0, fetchEvent)
++            constInt(1, 4)
++            aputObject(3, 2, 1)
++            iget(3, 0, backingOff)
++            invokeStatic(methodReference("Ljava/lang/Boolean;->valueOf(Z)Ljava/lang/Boolean;"), 3)
++            moveResult(3, OBJECT)
++            constInt(1, 5)
++            aputObject(3, 2, 1)
++            returnObject(2)
++        }
++        replaceBulkBridge("refresh") { method ->
++            move(0, method.p0Register, OBJECT)
++            checkCast(0, combined.type)
++            invokeVirtual(methodReference(currentComponent.toString()), 0)
++            moveResult(0, OBJECT)
++            sget(1, refreshEvent)
++            invokeInterface(methodReference(eventDispatch.toString()), 0, 1)
++            returnVoid()
++        }
++        replaceBulkBridge("requestNext") { method ->
++            readPaginator(method)
++            sget(1, fieldReference(paging.eventKindField))
++            newInstance(2, paging.eventType)
++            constInt(3, 0)
++            constInt(4, 0)
++            invokeDirect(methodReference(paging.constructorReference), 2, 1, 3, 4)
++            invoke(paging.dispatch.opcode, methodReference(paging.dispatch.descriptor), listOf(0, 2))
++            returnVoid()
++        }
++    }
++}
++
++context(context: BytecodePatchContext)
++private fun replaceBulkBridge(name: String, body: Block.(MutableMethod) -> Unit) {
++    val owner = context.mutableClassDefBy(EXTENSION)
++    val stub = requireExactlyOne("NewX profile bulk bridge $name", owner.methods.filter { it.name == name })
++    val method = stub.cloneMutable(additionalRegisters = 8)
++    owner.methods.remove(stub)
++    owner.methods.add(method)
++    method.implementation!!.apply {
++        while (instructions.isNotEmpty()) removeInstruction(instructions.lastIndex)
++    }
++    method.insertHook(0, relocateBranchTargets = false) { body(method) }
++}
+--- a/patches/src/main/kotlin/app/crimera/patches/newx/misc/mediatab/ProfilePhotosGalleryPatch.kt
++++ b/patches/src/main/kotlin/app/crimera/patches/newx/misc/mediatab/ProfilePhotosGalleryPatch.kt
+@@ -95,16 +95,17 @@
+     val paddingBottom: Method,
+     val androidView: Method,
+ )
+-private data class ResolvedPagingEvent(
++internal data class ResolvedPagingEvent(
+     val eventType: String,
+     val constructorReference: String,
+     val eventKindField: String,
+     val paginatorType: String,
+     val paginatorClassName: String,
++    val dispatch: NativeMethodCall,
+     val state: ResolvedPagingState,
+ )
+ 
+-private data class ResolvedPagingState(
++internal data class ResolvedPagingState(
+     val stateType: String,
+     val stateFlowGetter: NativeMethodCall,
+     val stateValueGetter: NativeMethodCall,
+@@ -387,7 +388,7 @@
+ 
+ 
+ context(context: BytecodePatchContext)
+-private fun resolvePagingEvent(classDefs: List<ClassDef>): ResolvedPagingEvent {
++internal fun resolvePagingEvent(classDefs: List<ClassDef>): ResolvedPagingEvent {
+     val classByType = classDefs.associateBy { it.type.toString() }
+     val dispatchCandidates = classDefs.flatMap { classDef ->
+         if (!classDef.type.toString().startsWith(BOTTOM_PAGING_SCOPE)) {
+@@ -576,6 +577,7 @@
+             .removePrefix("L")
+             .removeSuffix(";")
+             .replace('/', '.'),
++        dispatch = dispatch.toNativeCall(),
+         state = ResolvedPagingState(
+             stateType = stateType,
+             stateFlowGetter = stateFlowGetterCall,
+@@ -894,7 +896,7 @@
+         ?: throw PatchException("NewX timeline item click callback is not a renderer parameter")
+ }
+ 
+-private data class NativeMethodCall(
++internal data class NativeMethodCall(
+     val descriptor: String,
+     val opcode: Opcode,
+ )
+@@ -956,7 +958,7 @@
+         opcode = invocationOpcode(definingClass.toString()),
+     )
+ 
+-private fun isStateFlowInterface(
++internal fun isStateFlowInterface(
+     type: String,
+     classByType: Map<String, ClassDef>,
+ ): Boolean {
+@@ -970,7 +972,7 @@
+ }
+ 
+ context(context: BytecodePatchContext)
+-private fun resolveStateValueGetter(
++internal fun resolveStateValueGetter(
+     flowType: String,
+     classByType: Map<String, ClassDef>,
+ ): NativeMethodCall {
+@@ -1569,6 +1571,33 @@
+     val classDefs = allClassDefs()
+     val event = resolveNativePhotoViewerTarget(classDefs, timelineListDescriptor)
+     val (targets, delegates) = resolveItemClickViewerTargets(event, classDefs)
++    // The same native media contract serves the gallery and profile-wide downloads. Keep
++    // wrapper unwrapping here so a media timeline item never gets cast to a post-only model.
++    val extension = context.mutableClassDefBy(GALLERY_EXTENSION)
++    val mediaStub = requireExactlyOne("NewX gallery downloadable media bridge", extension.methods.filter {
++        it.name == "getDownloadMedia" && it.parameterTypes.map(CharSequence::toString) == listOf(OBJECT)
++    })
++    val mediaBridge = mediaStub.cloneMutable(additionalRegisters = 3)
++    extension.methods.remove(mediaStub)
++    extension.methods.add(mediaBridge)
++    mediaBridge.implementation!!.apply {
++        while (instructions.isNotEmpty()) removeInstruction(instructions.lastIndex)
++    }
++    mediaBridge.insertHook(0, relocateBranchTargets = false) {
++        delegates.forEachIndexed { index, delegate ->
++            instanceOf(0, mediaBridge.p0Register, delegate.itemType)
++            ifEqz(0, Target.Local("next_media_$index"))
++            move(1, mediaBridge.p0Register, OBJECT)
++            checkCast(1, delegate.itemType)
++            delegate.holderField?.let { iget(1, 1, fieldReference(it)) }
++            invoke(event.mediaGetter.opcode, methodReference(event.mediaGetter.descriptor), listOf(1))
++            moveResult(1, JAVA_LIST)
++            returnObject(1)
++            label("next_media_$index")
++        }
++        constInt(0, 0)
++        returnObject(0)
++    }
+     targets.forEach { target ->
+         val owner = context.mutableClassDefBy(target.ownerType)
+         val method = requireExactlyOne(
+--- a/patches/src/main/kotlin/app/crimera/patches/newx/timeline/TimelineFilterPatch.kt
++++ b/patches/src/main/kotlin/app/crimera/patches/newx/timeline/TimelineFilterPatch.kt
+@@ -9,10 +9,12 @@
+ import app.crimera.patches.utils.scopedMatchAll
+ import app.morphe.patcher.patch.bytecodePatch
+ import app.morphe.util.p0Register
++import app.morphe.util.getReference
++import com.android.tools.smali.dexlib2.Opcode
+ 
+ private const val OBJECT_DESCRIPTOR = "Ljava/lang/Object;"
+ private const val FILTER_TIMELINE_ITEMS_DESCRIPTOR =
+-    "$TIMELINE_FILTER_DESCRIPTOR->filterTimelineItems($OBJECT_DESCRIPTOR)$OBJECT_DESCRIPTOR"
++    "$TIMELINE_FILTER_DESCRIPTOR->filterTimelineItems($OBJECT_DESCRIPTOR$OBJECT_DESCRIPTOR)$OBJECT_DESCRIPTOR"
+ 
+ /** Installs the shared single-pass timeline filter hook used by individual features. */
+ internal val newXTimelineFilterPatch =
+@@ -30,13 +32,25 @@
+             // `p2` is the constructor's third argument, the `timelineItems` list it stores; the
+             // hook rewrites that register in place so the field keeps the filtered value.
+             val itemsRegister = method.p0Register + 2
++            val returns = method.implementation!!.instructions.toList().withIndex().filter {
++                it.value.opcode == Opcode.RETURN_VOID
++            }
++            // Bind the unfiltered snapshot to this exact initialized Success instance. Equal
++            // empty filtered lists from different profiles must never share media snapshots.
++            returns.sortedByDescending { it.index }.forEach { exit ->
++                method.insertHook(exit.index, relocateBranchTargets = true) {
++                    invokeStatic(methodReference(
++                        "Lapp/morphe/extension/newx/misc/ProfileBulkDownload;->attachPage($OBJECT_DESCRIPTOR)V",
++                    ), method.p0Register)
++                }
++            }
+             method.insertHook(
+                 index = 0,
+                 // The old plain insertion left every incoming label on the constructor head, so a
+                 // branch that reached it keeps skipping the hook, exactly as before.
+                 relocateBranchTargets = false,
+             ) {
+-                invokeStatic(methodReference(FILTER_TIMELINE_ITEMS_DESCRIPTOR), itemsRegister)
++                invokeStatic(methodReference(FILTER_TIMELINE_ITEMS_DESCRIPTOR), method.p0Register + 1, itemsRegister)
+                 moveResult(itemsRegister, OBJECT_DESCRIPTOR)
+             }
+         }
+--- a/patches/src/main/kotlin/app/crimera/patches/newx/utils/Constants.kt
++++ b/patches/src/main/kotlin/app/crimera/patches/newx/utils/Constants.kt
+@@ -5,6 +5,17 @@
+ import app.morphe.patcher.patch.Compatibility
+ 
+ internal object Constants {
++    // This new native integration is validated on the provided production APK.
++    // Older targets keep their existing patches and compatibility declarations.
++    val COMPATIBILITY_PROFILE_DOWNLOAD =
++        Compatibility(
++            name = "NewX",
++            packageName = "com.twitter.android",
++            apkFileType = ApkFileType.APKM,
++            appIconColor = 0x000000,
++            targets = listOf(AppTarget(version = "12.35.0-prod.01")),
++        )
++
+     val COMPATIBILITY_NEW_X =
+         Compatibility(
+             name = "NewX",
+--- /dev/null
++++ b/patches/src/main/kotlin/app/crimera/patches/newx/models/BooleanModelLabels.kt
+@@ -0,0 +1,111 @@
++package app.crimera.patches.newx.models
++
++import app.morphe.patcher.patch.PatchException
++import app.morphe.util.getReference
++import app.morphe.util.registersUsed
++import com.android.tools.smali.dexlib2.AccessFlags
++import com.android.tools.smali.dexlib2.Opcode
++import com.android.tools.smali.dexlib2.iface.Method
++import com.android.tools.smali.dexlib2.iface.instruction.OffsetInstruction
++import com.android.tools.smali.dexlib2.iface.instruction.OneRegisterInstruction
++import com.android.tools.smali.dexlib2.iface.instruction.TwoRegisterInstruction
++import com.android.tools.smali.dexlib2.iface.reference.FieldReference
++import com.android.tools.smali.dexlib2.iface.reference.MethodReference
++import com.android.tools.smali.dexlib2.iface.reference.StringReference
++
++private const val BUILDER = "Ljava/lang/StringBuilder;"
++private data class ModelLabel(val text: String)
++private class LabelBuilder(var label: String? = null)
++
++/** Follows append order through R8's small, straight-line StringBuilder helpers. */
++internal fun modelFieldsByAppendOrder(
++    modelToString: Method,
++    resolveHelper: (MethodReference) -> Method?,
++): Map<String, FieldReference> {
++    val found = linkedMapOf<String, FieldReference>()
++
++    fun walk(method: Method, values: MutableMap<Int, Any>, depth: Int): Any? {
++        if (depth > 3) throw PatchException("Nested model-label helper is too deep: $method")
++        var result: Any? = null
++        val instructions = method.implementation?.instructions?.toList().orEmpty()
++        if (instructions.any { it is OffsetInstruction }) {
++            throw PatchException("Model-label helper has conditional control flow: $method")
++        }
++        for (instruction in instructions) {
++            val one = instruction as? OneRegisterInstruction
++            val two = instruction as? TwoRegisterInstruction
++            when (instruction.opcode) {
++                Opcode.CONST_STRING, Opcode.CONST_STRING_JUMBO -> {
++                    values[one!!.registerA] = ModelLabel(instruction.getReference<StringReference>()!!.string)
++                }
++                Opcode.NEW_INSTANCE -> if (instruction.getReference<com.android.tools.smali.dexlib2.iface.reference.TypeReference>()?.type == BUILDER) {
++                    values[one!!.registerA] = LabelBuilder()
++                }
++                Opcode.IGET_BOOLEAN, Opcode.IGET_OBJECT, Opcode.IGET, Opcode.IGET_WIDE,
++                Opcode.IGET_BYTE, Opcode.IGET_CHAR, Opcode.IGET_SHORT -> {
++                    val field = instruction.getReference<FieldReference>()!!
++                    if (field.definingClass == modelToString.definingClass) values[two!!.registerA] = field
++                    else values.remove(two!!.registerA)
++                }
++                Opcode.MOVE, Opcode.MOVE_FROM16, Opcode.MOVE_16,
++                Opcode.MOVE_OBJECT, Opcode.MOVE_OBJECT_FROM16, Opcode.MOVE_OBJECT_16,
++                Opcode.MOVE_WIDE, Opcode.MOVE_WIDE_FROM16, Opcode.MOVE_WIDE_16 -> {
++                    val value = values[two!!.registerB]
++                    if (value == null) values.remove(two.registerA) else values[two.registerA] = value
++                }
++                Opcode.MOVE_RESULT_OBJECT -> {
++                    if (result == null) values.remove(one!!.registerA) else values[one!!.registerA] = result
++                }
++                Opcode.INVOKE_DIRECT, Opcode.INVOKE_DIRECT_RANGE,
++                Opcode.INVOKE_STATIC, Opcode.INVOKE_STATIC_RANGE,
++                Opcode.INVOKE_VIRTUAL, Opcode.INVOKE_VIRTUAL_RANGE -> {
++                    val reference = instruction.getReference<MethodReference>() ?: continue
++                    val registers = instruction.registersUsed
++                    val arguments = registers.map(values::get)
++                    result = null
++                    if (reference.definingClass == BUILDER) {
++                        val builder = arguments.getOrNull(0) as? LabelBuilder ?: continue
++                        when (val value = arguments.getOrNull(1).takeIf { reference.name in setOf("append", "<init>") }) {
++                            is ModelLabel -> builder.label = value.text
++                            is FieldReference -> {
++                                builder.label?.let { label ->
++                                    val previous = found.put(label, value)
++                                    if (previous != null && previous.toString() != value.toString()) {
++                                        throw PatchException("Ambiguous model label '$label': $previous, $value")
++                                    }
++                                }
++                                builder.label = null
++                            }
++                        }
++                        if (reference.returnType == BUILDER) result = builder
++                    } else if ((arguments.any { it is LabelBuilder } ||
++                            arguments.any { it is ModelLabel } && arguments.any { it is FieldReference }) &&
++                        reference.returnType in setOf("V", "Ljava/lang/String;", BUILDER)) {
++                        val helper = resolveHelper(reference)
++                            ?: throw PatchException("Cannot inspect model-label helper: $reference")
++                        if (!AccessFlags.STATIC.isSet(helper.accessFlags)) throw PatchException("Model-label helper is not static: $helper")
++                        val widths = helper.parameterTypes.map { if (it == "J" || it == "D") 2 else 1 }
++                        var register = helper.implementation!!.registerCount - widths.sum()
++                        var argument = 0
++                        val bindings = mutableMapOf<Int, Any>()
++                        widths.forEach { width ->
++                            arguments.getOrNull(argument)?.let { bindings[register] = it }
++                            register += width
++                            argument += width
++                        }
++                        result = walk(helper, bindings, depth + 1)
++                    }
++                }
++                Opcode.RETURN_OBJECT -> return values[one!!.registerA]
++                else -> if (one != null && instruction.opcode.setsRegister()) values.remove(one.registerA)
++            }
++        }
++        return null
++    }
++
++    walk(modelToString, mutableMapOf(), 0)
++    return found
++}
++
++internal fun booleanModelFields(method: Method, resolveHelper: (MethodReference) -> Method?): Map<String, FieldReference> =
++    modelFieldsByAppendOrder(method, resolveHelper).filterValues { it.type == "Z" }
+--- /dev/null
++++ b/patches/src/test/kotlin/app/crimera/patches/newx/misc/mediatab/ProfileBulkHostResolverTest.kt
+@@ -0,0 +1,87 @@
++package app.crimera.patches.newx.misc.mediatab
++
++// Reproduces the exact 12.34 failure: the real URT component and two coroutine captures all
++// hold the bottom paginator. Field presence alone returned three candidates and blocked patching.
++import app.morphe.patcher.extensions.InstructionExtensions.addInstructionsWithLabels
++import app.morphe.patcher.patch.PatchException
++import app.morphe.patcher.util.proxy.mutableTypes.MutableMethod
++import com.android.tools.smali.dexlib2.AccessFlags
++import com.android.tools.smali.dexlib2.builder.MethodImplementationBuilder
++import com.android.tools.smali.dexlib2.immutable.ImmutableClassDef
++import com.android.tools.smali.dexlib2.immutable.ImmutableField
++import com.android.tools.smali.dexlib2.immutable.ImmutableMethod
++import com.android.tools.smali.dexlib2.immutable.ImmutableMethodParameter
++import kotlin.test.Test
++import kotlin.test.assertFailsWith
++import kotlin.test.assertEquals
++import kotlin.test.assertSame
++import kotlin.test.assertTrue
++
++class ProfileBulkHostResolverTest {
++    private val paginator = "Lcom/x/urt/paging/bottom/RenamedPaginator;"
++    private val contract = "Lcom/x/urt/paging/RenamedContract;"
++
++    @Test
++    fun `empty state and native refresh objects resolve by contract and label across renames`() {
++        val state = "Lcom/x/urt/RenamedState;"
++        val events = "Lcom/x/urt/RenamedEvent;"
++        val unrelated = singleton("Lother/Empty;", "Lother/State;", "Empty")
++        for (name in listOf("FirstRename", "SecondRename")) {
++            val empty = singleton("Lcom/x/urt/$name;", state, "Empty")
++            val refresh = singleton("Lcom/x/urt/Refresh$name;", events, "RefreshTimeline")
++            val classes = listOf(unrelated, empty, refresh)
++            assertEquals(empty.type, resolveBulkSingleton(classes, state, "Empty").definingClass)
++            assertEquals(refresh.type, resolveBulkSingleton(classes, events, "RefreshTimeline").definingClass)
++            assertFailsWith<PatchException> { resolveBulkSingleton(classes, state, "RefreshTimeline") }
++            assertFailsWith<PatchException> {
++                resolveBulkSingleton(classes + singleton("Lcom/x/urt/Duplicate;", state, "Empty"), state, "Empty")
++            }
++        }
++    }
++
++    @Test
++    fun `host getter excludes suspend and zero-argument captures and fails closed on real ambiguity`() {
++        val suspendA = fixture("Lcom/x/urt/paging/bottom/StateCollector;", "invokeSuspend", "Ljava/lang/Object;", true)
++        val suspendB = fixture("Lcom/x/urt/paging/bottom/NetworkCollector;", "invokeSuspend", "Ljava/lang/Object;", true)
++        val zeroArg = fixture("Lcom/x/urt/ui/Callback;", "invoke", "Ljava/lang/Object;", false)
++        val captures = listOf(suspendA, suspendB, zeroArg)
++        for (name in listOf("Alpha", "Production", "AnotherRename")) {
++            val host = fixture("Lcom/x/urt/$name;", "renamedGetter", contract, false)
++            assertSame(host, resolveBulkTimelineHost(captures + host, paginator, contract))
++        }
++        assertFailsWith<PatchException> { resolveBulkTimelineHost(captures, paginator, contract) }
++        val first = fixture("Lcom/x/urt/First;", "one", contract, false)
++        val second = fixture("Lcom/x/urt/Second;", "two", contract, false)
++        val ambiguous = assertFailsWith<PatchException> {
++            resolveBulkTimelineHost(captures + first + second, paginator, contract)
++        }
++        assertTrue(ambiguous.message.orEmpty().contains("found 2"))
++    }
++
++    private fun fixture(owner: String, name: String, result: String, argument: Boolean): ImmutableClassDef {
++        val parameters = if (argument) listOf(ImmutableMethodParameter("Ljava/lang/Object;", emptySet(), null)) else emptyList()
++        val implementation = MethodImplementationBuilder(if (argument) 3 else 2)
++        val method = MutableMethod(ImmutableMethod(owner, name, parameters, result, AccessFlags.PUBLIC.value,
++            emptySet(), emptySet(), implementation.methodImplementation))
++        method.addInstructionsWithLabels(0, """
++            iget-object v0, p0, $owner->captured:$paginator
++            return-object v0
++        """.trimIndent())
++        return ImmutableClassDef(owner, AccessFlags.PUBLIC.value, "Ljava/lang/Object;", emptyList(), null,
++            emptySet(), listOf(ImmutableField(owner, "captured", paginator, AccessFlags.PUBLIC.value,
++                null, emptySet(), emptySet())), listOf(method))
++    }
++
++    private fun singleton(owner: String, contract: String, label: String): ImmutableClassDef {
++        val method = MutableMethod(ImmutableMethod(owner, "toString", emptyList(), "Ljava/lang/String;",
++            AccessFlags.PUBLIC.value, emptySet(), emptySet(), MethodImplementationBuilder(2).methodImplementation))
++        method.addInstructionsWithLabels(0, """
++            const-string v0, "$label"
++            return-object v0
++        """.trimIndent())
++        return ImmutableClassDef(owner, AccessFlags.PUBLIC.value, "Ljava/lang/Object;", listOf(contract), null,
++            emptySet(), listOf(ImmutableField(owner, "renamedInstance", owner,
++                AccessFlags.PUBLIC.value or AccessFlags.STATIC.value or AccessFlags.FINAL.value,
++                null, emptySet(), emptySet())), listOf(method))
++    }
++}

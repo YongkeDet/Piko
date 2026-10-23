@@ -77,6 +77,31 @@ def apply_download_dialog_localization(piko_directory: Path) -> None:
     strings.write_text(content.replace("</resources>", extra + "</resources>"), encoding="utf-8")
 
 
+def test_profile_bulk_pager(piko_directory: Path) -> None:
+    """Exercise native paging, recovery and bounded no-progress protection."""
+    work = piko_directory.parent / "profile-media-tests"
+    classes = work / "classes"
+    classes.mkdir(parents=True, exist_ok=True)
+    dependencies = [
+        ("junit.jar", "junit/junit/4.13.2/junit-4.13.2.jar"),
+        ("hamcrest.jar", "org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.jar"),
+    ]
+    for name, path in dependencies:
+        urlretrieve("https://repo.maven.apache.org/maven2/" + path, work / name)
+    classpath = os.pathsep.join(str(work / name) for name, _ in dependencies)
+    relative = "app/morphe/extension/newx/misc"
+    subprocess.run([
+        "javac", "--release", "17", "-encoding", "UTF-8", "-cp", classpath, "-d", str(classes),
+        str(piko_directory / f"extensions/newx/src/main/java/{relative}/ProfileBulkPager.java"),
+        str(piko_directory / "extensions/newx/src/main/java/app/morphe/extension/newx/utils/ToStringParser.java"),
+        str(piko_directory / f"extensions/newx/src/test/java/{relative}/ProfileBulkPagerTest.java"),
+    ], check=True)
+    subprocess.run([
+        "java", "-cp", str(classes) + os.pathsep + classpath, "org.junit.runner.JUnitCore",
+        "app.morphe.extension.newx.misc.ProfileBulkPagerTest",
+    ], check=True)
+
+
 def apply_chinese_localization(piko_directory: Path) -> None:
     """Include the local NewX settings translation in the patch bundle."""
     source = Path(__file__).resolve().parent / "localizations" / NEWX_CHINESE_STRINGS
@@ -242,9 +267,10 @@ def build_piko_patches(
         apply_chinese_localization(piko_directory)
         set_project_version(piko_directory, patch_version)
         test_timeline_refresh_policy(piko_directory)
+        test_profile_bulk_pager(piko_directory)
 
         subprocess.run(
-            ["./gradlew", "clean", "buildAndroid"],
+            ["./gradlew", "clean", "buildAndroid", ":patches:build", ":patches:lintNewxResolvers", "--no-daemon"],
             cwd=piko_directory,
             env=os.environ.copy(),
             check=True,

@@ -1,16 +1,26 @@
 # Piko 中文补丁
 
-当前版本 `X.26.04`：开启“时间线 → 禁用时间线自动刷新”后，已有列表仅允许手动下拉刷新；首次进入时加载内容，以及向下浏览时加载更多照常。适用于“为你推荐”“正在关注”等该开关原本覆盖的时间线。
+当前版本 **X.26.10**，共 516 条中文设置和下载窗口文案。
 
-新增“帖子操作与媒体 → 内嵌下载 → 按作者分文件夹保存”开关，默认关闭。开启后，图片、视频、GIF 和拼接图片会保存到对应媒体目录下的 `@作者账号` 文件夹，例如 `图片目录/@jack/文件.jpg`；接管原生下载时同样生效。账号统一为小写；无法识别作者时保存到 `unknown_user`。关闭后直接保存到已选目录，已有文件不会搬移。
+## 用户主页批量下载
 
-共 489 条中文设置和下载窗口文案。此开关关闭时使用原有刷新行为；打开帖子详情不在主页时间线刷新限制范围内。
+打开用户主页的“媒体”，进入 Piko 图片画廊，点击“下载全部图片和视频”，选择全部媒体、仅图片或仅视频。入口和分类使用原有 ListItem、图标、字体、底部弹窗和主题配色，适配 X 的浅色、深色及 Dim 主题。开关位于“帖子操作与媒体 → 下载全部主页媒体”，默认开启；需要同时启用图片画廊、内嵌下载及相关依赖补丁。
 
-## 订阅补丁
+通过 X 原生 Photos/Videos 控制器翻页，依次读取所选分类中当前账号可以访问的媒体。下载沿用目录、画质、文件名、重名策略和按作者分文件夹设置；画质为“每次询问”时批量任务使用最高可用画质。最多同时排队四个文件，显示保存、跳过、失败及不可用数量。下载期间保持当前主页及进度窗口打开，关闭进度窗口或取消会停止任务并保留已完成的文件。
 
-在 Android 设备上打开 [一键添加到 Morphe](https://morphe.software/add-source?github=YongkeDet/Piko)。
+原生分页结束后显示全部处理完成。连续三页没有新增媒体、重复页面、限流、读取错误或恢复次数达到上限时显示对应停止原因；保护停止不会提示全部完成。翻页进展在分类筛选及文件去重前判断，防止“仅图片”下载遇到视频页时提前停止。选择全部媒体时，图片阶段触发无新增保护后仍会处理视频阶段。
 
-或在 Morphe 的“来源 → 添加 → 远程”中输入：
+新下载功能仅声明支持 X `12.35.0-prod.01`。构建、离线应用补丁和实际使用的验证范围见 [整合记录](docs/newx-resolver-linter/2026-10-23-native-profile-integration.md)。此前 API 方案和分页问题记录保留在 Git 历史及 [实现记录](docs/newx-resolver-linter/2026-10-23-profile-media-download.md)、[分页修复记录](docs/newx-resolver-linter/2026-10-23-profile-pagination.md) 中。
+
+## 保留功能
+
+开启“时间线 → 禁用时间线自动刷新”后，已有列表仅允许手动下拉刷新；首次进入加载及向下浏览时加载更多照常。
+
+“帖子操作与媒体 → 内嵌下载 → 按作者分文件夹保存”默认关闭。开启后，图片、视频、GIF 和拼接图片保存到对应目录下的 `@作者账号` 子文件夹，接管原生下载时也生效。无法识别作者时使用 `unknown_user`。关闭后直接保存到已选目录，已有文件不会搬移。
+
+## 订阅与下载
+
+在 Android 设备上打开 [一键添加到 Morphe](https://morphe.software/add-source?github=YongkeDet/Piko)，或在 Morphe 的“来源 → 添加 → 远程”中输入：
 
 ```text
 https://github.com/YongkeDet/Piko
@@ -22,30 +32,20 @@ https://github.com/YongkeDet/Piko
 https://raw.githubusercontent.com/YongkeDet/Piko/main/patches-bundle.json
 ```
 
-以后在同一来源中检查更新，无需重复导入本地 `.mpp`。订阅更新的是补丁包；已安装的 X 仍需重新应用补丁后更新安装。
+固定来源地址不变，检查更新即可获取 X.26.10；已安装的 X 需要重新应用补丁后更新安装。也可在 [X.26.10 发布页](https://github.com/YongkeDet/Piko/releases/tag/X.26.10) 下载 `.mpp`。来源格式遵循 [Morphe 官方说明](https://github.com/MorpheApp/morphe-manager/blob/main/docs/patch-sources.md)。订阅仅在构建和发布成功后更新。
 
-来源格式遵循 [Morphe 官方说明](https://github.com/MorpheApp/morphe-manager/blob/main/docs/patch-sources.md)。发布流程只在构建和上传成功后更新订阅。本次按要求更新现有 `X.26.04`，订阅地址不变；Morphe 可通过订阅中的更新时间识别同版本更新。
+## 构建与回退
 
-## 下载与构建
+云端使用 `UPSTREAM.json` 固定的源码及构建脚本，并应用 `source-patches/`。工作流验证中文资源和占位符，运行分页与时间线测试、NewX resolver 检查和完整构建，生成补丁包、构建信息及 SHA-256 校验值。既有补丁支持 X `12.34.0-prod.01` 和 `12.35.0-prod.01`，本次新增下载功能仅支持后者。仓库不包含第三方 X 安装包。
 
-订阅后选择对应的原始 X 安装包应用补丁。也可以前往 [Releases](https://github.com/YongkeDet/Piko/releases) 下载指定版本的 `.mpp` 文件，用于手动安装或回退。
+- X.26.10 单独发布；X.26.04 及此前版本的标签和发布产物保留。
+- 更新前已发布源码：`backup/before-X.26.10`（`9beddd580ecf928e1b034c9132c1fa1f32eb712e`）。
+- 此前 API 下载预览：`backup/profile-api-preview-before-X.26.10`（`5708520271180cdc648d26e783544996ef43484d`）。
+- 回退补丁时下载旧 Releases 中的 `.mpp`；查看旧源码时从对应标签或备份分支创建分支，保留现有历史。
+- 后续发布修改 `RELEASE.json` 版本号后提交即可。每次发布的 `build-info.json` 记录源码、覆盖补丁及产物校验值。
 
-云端工作流会编译固定版本的源码，检查资源名称和格式占位符，生成补丁包、构建信息和 SHA-256 校验值。当前适用 X `12.34.0-prod.01` 和 `12.35.0-prod.01`。此仓库不包含第三方 X 安装包。
+## 来源与许可
 
-在 [Actions](https://github.com/YongkeDet/Piko/actions/workflows/build.yml) 中可以手动重新构建。更新构建配置或翻译也会触发构建。默认保留已发布版本；只有 `RELEASE.json` 显式指定发布 ID、旧提交和备份分支时，才能备份后更新该现有发布。
+构建脚本基于 [crimera/piko-newx](https://github.com/crimera/piko-newx)，补丁源码来自 [crimera/piko 的 x-lite 分支](https://github.com/crimera/piko/tree/x-lite)，由 Morphe 提供补丁工具。
 
-## 版本与回退
-
-- 本次更新沿用 `X.26.04`，未新增 Release；更新前代码保存在 `backup/X.26.04-before-user-folders` 分支，旧补丁包 `X.26.04-before-user-folders.mpp` 保留在同一发布中。
-- 第一版标签和发布名称：`X.26.01`；本次行为调整为 `X.26.04`，此前版本的标签和产物全部保留。版本信息保存在 `RELEASE.json`。
-- 汉化前基线：`upstream-baseline` 分支；最初的仓库提交也保留在 Git 历史中。
-- 查看第一版：`git switch --detach X.26.01`。
-- 查看汉化前版本：`git switch upstream-baseline`。
-- 恢复此前已发布版本时，下载对应 Releases 产物，或从其标签创建修复分支；不要覆盖旧标签。
-- 后续如需新发布，先修改 `RELEASE.json` 中的版本号（例如 `X.26.05`），并移除本次专用的 `replace_existing_release` 配置，再提交修改。
-
-`UPSTREAM.json` 固定上游源码和构建脚本的提交；每次发布的 `build-info.json` 记录实际构建提交和文件校验值。
-
-## 上游
-
-构建脚本基于 [crimera/piko-newx](https://github.com/crimera/piko-newx)；补丁源码来自 [crimera/piko 的 x-lite 分支](https://github.com/crimera/piko/tree/x-lite)，由 Morphe 提供补丁工具。上游源码的许可证和声明保留在其原仓库。本仓库仅维护中文资源和相关构建配置。
+X.26.10 的原生批量下载控制器、分页状态机、宿主关系解析和原始媒体快照机制改编自 [YongkeDet/piko-custom](https://github.com/YongkeDet/piko-custom/tree/006e9a547e7606935242f08f1b0c65702a2d0c3a) 的同名实现，再整合本仓库的无新增保护、下载选项及原有 Piko 界面。覆盖源码与原项目许可证声明保持一致，来源和修改范围详见整合记录。
