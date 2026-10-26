@@ -1,14 +1,5 @@
 --- a/patch-twitter.sh
 +++ b/patch-twitter.sh
-@@ -10,7 +10,7 @@
- PATCHER_MAX_HEAP_MB="${PATCHER_MAX_HEAP_MB:-1024}"
- # Overridable so the bundle can also be exercised against a pre-release/manager patcher build,
- # which is the ABI the shipped manager app actually executes.
--MORPHE_CLI_JAR="${MORPHE_CLI_JAR:-../piko/morphe-desktop-1.11.0-all.jar}"
-+MORPHE_CLI_JAR="${MORPHE_CLI_JAR:-../piko/morphe-desktop-1.19.0-all.jar}"
- FASTDEPLOY_PLATFORM_TOOLS_VERSION="${FASTDEPLOY_PLATFORM_TOOLS_VERSION:-36.0.0}"
- FASTDEPLOY_PLATFORM_TOOLS_DIR="${FASTDEPLOY_PLATFORM_TOOLS_DIR:-${HOME}/.cache/piko/platform-tools-${FASTDEPLOY_PLATFORM_TOOLS_VERSION}}"
- 
 @@ -28,7 +28,7 @@
  fi
  
@@ -18,7 +9,7 @@
  APK="$DEFAULT_APK"
  FLAGS=()
  for arg in "$@"; do
-@@ -77,6 +77,7 @@
+@@ -75,6 +75,7 @@
    -e "NewX: Custom font" \
    -e "NewX: Custom sharing domain" \
    -e "NewX: Inline download button" \
@@ -28,7 +19,7 @@
    -e "NewX: Set default reply sorting" \
 --- a/extensions/newx/src/main/java/app/morphe/extension/newx/misc/InlineDownloadButton.java
 +++ b/extensions/newx/src/main/java/app/morphe/extension/newx/misc/InlineDownloadButton.java
-@@ -509,7 +509,7 @@
+@@ -527,7 +527,7 @@
          return null;
      }
  
@@ -37,7 +28,7 @@
          if (url == null) return null;
          int cut = url.length();
          int query = url.indexOf('?');
-@@ -992,7 +992,7 @@
+@@ -1030,7 +1030,7 @@
       * shown. Photos use the exact twimg size tiers; videos and GIFs use a best-effort variant
       * policy since the model has no per-variant resolution field.
       */
@@ -46,7 +37,7 @@
          if (item == null || item.resolutionOptions.size() <= 1) return null;
  
          if (isImageItem(item)) {
-@@ -1184,7 +1184,25 @@
+@@ -1222,7 +1222,25 @@
              ConflictPolicy policy,
              boolean explicitResolution
      ) {
@@ -73,7 +64,7 @@
  
          final NewXDownloadFolders.MediaKind kind;
          try {
-@@ -1194,7 +1212,7 @@
+@@ -1232,7 +1250,7 @@
                      () -> "Unsupported NewX download media type: " + download.mimeType,
                      exception
              );
@@ -82,7 +73,7 @@
          }
  
          String template = DownloadSettings.filenameTemplate();
-@@ -1216,7 +1234,7 @@
+@@ -1254,7 +1272,7 @@
  
          DownloadEngine engine = NewXDownloader.get();
          if (engine == null) {
@@ -91,7 +82,7 @@
          }
  
          final Uri destinationTree = NewXDownloadFolders.treeUri(kind);
-@@ -1238,17 +1256,18 @@
+@@ -1276,17 +1294,18 @@
              );
          } catch (IllegalArgumentException exception) {
              NewXLogger.printException(() -> "Invalid NewX download request: " + resolvedFileName, exception);
@@ -1870,7 +1861,7 @@
          }
 --- a/patches/src/main/kotlin/app/crimera/patches/newx/utils/Constants.kt
 +++ b/patches/src/main/kotlin/app/crimera/patches/newx/utils/Constants.kt
-@@ -5,6 +5,19 @@
+@@ -5,6 +5,20 @@
  import app.morphe.patcher.patch.Compatibility
  
  internal object Constants {
@@ -1884,6 +1875,7 @@
 +            targets = listOf(
 +                AppTarget(version = "12.35.0-prod.01"),
 +                AppTarget(version = "12.36.1-prod.01"),
++                AppTarget(version = "12.37.2-prod.01"),
 +            ),
 +        )
 +

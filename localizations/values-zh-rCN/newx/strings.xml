@@ -155,8 +155,6 @@
     <string name="piko_newx_disable_blur_title">禁用 Compose 模糊效果</string>
     <string name="piko_newx_disable_blur_summary">移除 NewX Compose 界面的模糊效果，保留已配置的背景着色和遮罩效果</string>
 
-    <string name="piko_newx_share_image_title">将帖子分享为图片</string>
-    <string name="piko_newx_share_image_summary">在帖子菜单中添加将帖子渲染为图片并分享的操作</string>
     <string name="piko_newx_browse_tweet_object_title">查看推文对象</string>
     <string name="piko_newx_browse_tweet_object_summary">在帖子菜单中添加用于查看推文对象的调试选项</string>
 
@@ -249,8 +247,6 @@
     <string name="piko_newx_inline_action_bookmark">书签</string>
     <string name="piko_newx_inline_action_share">分享</string>
 
-    <string name="piko_newx_native_inline_action_spacing_title">使用原生操作栏间距</string>
-    <string name="piko_newx_native_inline_action_spacing_summary">开启：使用 NewX 的紧凑操作间距（12.28.0-alpha.04 及更新版本）。关闭：使用旧版 NewX 的均匀间距，隐藏操作后不留空隙。</string>
 
     <string name="piko_newx_nav_bar_home">主页</string>
     <string name="piko_newx_nav_bar_explore">探索</string>

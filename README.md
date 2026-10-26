@@ -1,8 +1,8 @@
 # Piko 中文补丁
 
-当前版本 **X.26.15**（基于上游 v3.61.0，支持 X 12.36.1-prod.01），共 1316 条中文界面文本。
+当前版本 **X.26.16**（基于上游 v3.64.1，支持 X 12.37.2-prod.01），共 1312 条中文界面文本。
 
-本版完整纳入上游 v3.61.0 的 NewX 功能与修复，包括 Morphe Patcher 2.0、新版时间线恢复、设置入口、分隔线及回复排序适配，再叠加本仓库的下载增强和汉化。新版与旧版安装包的离线验证详见 [X.26.15 升级记录](docs/newx-resolver-linter/2026-10-23-x-12-36-1-upgrade.md)。
+本版完整纳入上游 v3.64.1 的 NewX 功能与修复，包括 12.37 系列解析适配、全部主页标签编辑、克隆修复及时间线和内嵌下载性能优化，再叠加本仓库的下载增强和汉化。跟随上游移除帖子分享为图片、经典操作栏间距补丁及其设置。验证范围详见 [X.26.16 升级记录](docs/newx-resolver-linter/2026-10-26-x-12-37-2-upgrade.md)。
 
 ## 管理功能开关中文名称
 
@@ -18,7 +18,7 @@
 
 原生分页结束后显示全部处理完成。连续三页没有新增媒体、重复页面、限流、读取错误或恢复次数达到上限时显示对应停止原因；保护停止不会提示全部完成。翻页进展在分类筛选及文件去重前判断，防止“仅图片”下载遇到视频页时提前停止。选择全部媒体时，图片阶段触发无新增保护后仍会处理视频阶段。
 
-下载功能支持 X `12.35.0-prod.01` 和 `12.36.1-prod.01`。构建、离线应用补丁和实际使用的验证范围见 [整合记录](docs/newx-resolver-linter/2026-10-23-native-profile-integration.md)。此前 API 方案和分页问题记录保留在 Git 历史及 [实现记录](docs/newx-resolver-linter/2026-10-23-profile-media-download.md)、[分页修复记录](docs/newx-resolver-linter/2026-10-23-profile-pagination.md) 中。
+下载功能支持 X `12.35.0-prod.01`、`12.36.1-prod.01` 和 `12.37.2-prod.01`。构建、离线应用补丁和实际使用的验证范围见 [整合记录](docs/newx-resolver-linter/2026-10-23-native-profile-integration.md)。此前 API 方案和分页问题记录保留在 Git 历史及 [实现记录](docs/newx-resolver-linter/2026-10-23-profile-media-download.md)、[分页修复记录](docs/newx-resolver-linter/2026-10-23-profile-pagination.md) 中。
 
 ## 保留功能
 
@@ -40,12 +40,13 @@ https://github.com/YongkeDet/Piko
 https://raw.githubusercontent.com/YongkeDet/Piko/main/patches-bundle.json
 ```
 
-固定来源地址不变，检查更新即可获取 X.26.15；已安装的 X 需要重新应用补丁后更新安装。也可在 [X.26.15 发布页](https://github.com/YongkeDet/Piko/releases/tag/X.26.15) 下载 `.mpp`。来源格式遵循 [Morphe 官方说明](https://github.com/MorpheApp/morphe-manager/blob/main/docs/patch-sources.md)。订阅仅在构建和发布成功后更新。
+固定来源地址不变，检查更新即可获取 X.26.16；已安装的 X 需要重新应用补丁后更新安装。也可在 [X.26.16 发布页](https://github.com/YongkeDet/Piko/releases/tag/X.26.16) 下载 `.mpp`。来源格式遵循 [Morphe 官方说明](https://github.com/MorpheApp/morphe-manager/blob/main/docs/patch-sources.md)。订阅仅在构建和发布成功后更新。
 
 ## 构建与回退
 
-云端使用 `UPSTREAM.json` 固定的源码及构建脚本，并应用 `source-patches/`。工作流验证中文资源和占位符，运行分页与时间线测试、NewX resolver 检查和完整构建，生成补丁包、构建信息及 SHA-256 校验值。沿用上游兼容列表：X `12.34.0-prod.01`、`12.35.0-prod.01` 和 `12.36.1-prod.01`；主页批量下载支持后两者。补丁引擎升级为 Morphe Patcher 2.0，需要使用支持该引擎的 Morphe（离线验证使用官方 Morphe Desktop 1.19.0）。仓库不包含第三方 X 安装包。
+云端使用 `UPSTREAM.json` 固定的源码及构建脚本，并应用 `source-patches/`。工作流验证中文资源和占位符，运行分页与时间线测试、NewX resolver 检查和完整构建，生成补丁包、构建信息及 SHA-256 校验值。沿用上游兼容列表：X `12.34.0-prod.01`、`12.35.0-prod.01`、`12.36.1-prod.01` 以及 `12.37.0-prod.01`、`12.37.1-prod.01`、`12.37.2-prod.01`；主页批量下载支持 12.35、12.36.1 和 12.37.2。补丁引擎升级为 Morphe Patcher 2.0，需要使用支持该引擎的 Morphe（离线验证使用官方 Morphe Desktop 1.19.0）。仓库不包含第三方 X 安装包。
 
+- X.26.16 单独发布，更新前 main 保存在 `backup/before-X.26.16`（`aa58d7d4b946a3a1010e8fc72a1cd55e877d5c88`）；X.26.15 的标签与发布产物保留。
 - X.26.15 单独发布，更新前 main 保存在 `backup/before-X.26.15`（`f29c16237275e2a01debffd322ef0be5f442d2e1`），X.26.11 的标签与发布产物保留。
 - X.26.11 单独发布，更新前的 main 保存在 `backup/before-X.26.11`（`1223942160541711ac16bacca252a299f550958a`）；X.26.10、X.26.04 及此前版本的标签和发布产物保留。
 - 更新前已发布源码：`backup/before-X.26.10`（`9beddd580ecf928e1b034c9132c1fa1f32eb712e`）。

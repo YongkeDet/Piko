@@ -67,7 +67,7 @@
      /** Routes a MIME type to its destination. Unknown media types fail closed. */
 --- a/extensions/newx/src/main/java/app/morphe/extension/newx/misc/InlineDownloadButton.java
 +++ b/extensions/newx/src/main/java/app/morphe/extension/newx/misc/InlineDownloadButton.java
-@@ -1230,7 +1230,7 @@
+@@ -1268,7 +1268,7 @@
                      download.url,
                      fallbacks,
                      destinationTree,
@@ -76,7 +76,7 @@
                      resolvedFileName,
                      download.mimeType,
                      policy,
-@@ -1241,7 +1241,10 @@
+@@ -1279,7 +1279,10 @@
              return EnqueueState.FAILED;
          }
  
@@ -154,7 +154,7 @@
                  NewXLogger.printException(() -> LOG_PREFIX + "Failed to create merged image document", exception);
 --- a/patches/src/main/kotlin/app/crimera/patches/newx/misc/inlineactions/InlineDownloadButtonPatch.kt
 +++ b/patches/src/main/kotlin/app/crimera/patches/newx/misc/inlineactions/InlineDownloadButtonPatch.kt
-@@ -200,6 +200,12 @@
+@@ -207,6 +207,12 @@
                                  choice("skip", "piko_newx_inline_download_conflict_skip"),
                              ),
                      )
