@@ -280,6 +280,17 @@ def build_piko_patches(
             check=True,
         )
 
+        # Run real extension regressions for upstream caches and patch/user override precedence.
+        subprocess.run(
+            ["./gradlew", ":extensions:newx:testDebugUnitTest",
+             "--tests", "app.morphe.extension.newx.timeline.NewXTimelineFilterTest",
+             "--tests", "app.morphe.extension.newx.featureswitches.FeatureSwitchStoreTest",
+             "--tests", "app.morphe.extension.newx.utils.NewXUtilsTest",
+             "--tests", "app.morphe.extension.newx.theme.DynamicColorPaletteTest",
+             "--no-daemon"],
+            cwd=piko_directory, env=os.environ.copy(), check=True,
+        )
+
         artifacts_directory = piko_directory / "patches" / "build" / "libs"
         artifact = artifacts_directory / f"patches-{patch_version}.mpp"
         if not artifact.is_file():

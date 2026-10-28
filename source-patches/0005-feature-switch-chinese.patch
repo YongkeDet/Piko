@@ -106,7 +106,7 @@
 +                .setSubtitle(FeatureSwitchLabels.editorSubtitle(context, featureKey))
                  .setBodyView(form);
          ButtonView remove = null;
-         if (overridden) {
+         if (hasUserOverride) {
 @@ -465,7 +465,11 @@
              sessionNewKeys.addAll(store.getUnseenKeys());
          }

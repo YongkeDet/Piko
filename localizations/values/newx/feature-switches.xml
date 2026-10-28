@@ -800,4 +800,5 @@
     <string name="piko_newx_fs_xlite_video_playback_vertical_fill_enabled">xlite_video_playback_vertical_fill_enabled</string>
     <string name="piko_newx_fs_xlite_video_playback_vertical_fill_status_bar_top_enabled">xlite_video_playback_vertical_fill_status_bar_top_enabled</string>
     <string name="piko_newx_fs_xlite_video_playback_video_top_lift_enabled">xlite_video_playback_video_top_lift_enabled</string>
+    <string name="piko_newx_fs_x_lite_profile_photos_videos_tabs_enabled">x_lite_profile_photos_videos_tabs_enabled</string>
 </resources>
