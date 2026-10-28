@@ -1,15 +1,15 @@
 --- a/patch-twitter.sh
 +++ b/patch-twitter.sh
-@@ -28,7 +28,7 @@
+@@ -34,7 +34,7 @@
  fi
  
  DEFAULT_APK="./apks/12.31.0-alpha.02.apk"
--OUTPUT_APK="$HOME/Downloads/piko-twitter-patched.apk"
-+OUTPUT_APK="${PIKO_PATCH_OUTPUT:-$HOME/Downloads/piko-twitter-patched.apk}"
+-OUTPUT_APK="${PATCH_OUTPUT_APK:-$HOME/Downloads/piko-twitter-patched.apk}"
++OUTPUT_APK="${PIKO_PATCH_OUTPUT:-${PATCH_OUTPUT_APK:-$HOME/Downloads/piko-twitter-patched.apk}}"
  APK="$DEFAULT_APK"
  FLAGS=()
  for arg in "$@"; do
-@@ -75,6 +75,7 @@
+@@ -85,6 +85,7 @@
    -e "NewX: Custom font" \
    -e "NewX: Custom sharing domain" \
    -e "NewX: Inline download button" \
@@ -889,8 +889,8 @@
 +import java.util.IdentityHashMap;
  import java.util.Collections;
  import java.util.HashSet;
- import java.util.List;
-@@ -120,6 +122,40 @@
+ import java.util.IdentityHashMap;
+@@ -126,6 +128,40 @@
      }
  
      /** Applies all selected timeline filters in one traversal of the immutable item tree. */
@@ -2086,3 +2086,25 @@
 +                null, emptySet(), emptySet())), listOf(method))
 +    }
 +}
+--- a/extensions/newx/src/test/java/app/morphe/extension/newx/timeline/NewXTimelineFilterTest.java
++++ b/extensions/newx/src/test/java/app/morphe/extension/newx/timeline/NewXTimelineFilterTest.java
+@@ -524,6 +524,19 @@
+         assertSame(keptThreadPost, filteredConversation.children.get(0).item);
+         assertEquals(1, FilteredRepliesStore.shared().getCount("1"));
+         assertEquals("thread-id", FilteredRepliesStore.shared().getReplies("1").get(0).getPostId());
++    }
++
++    @Test
++    public void memoizedDisplayFilteringKeepsRawProfileMediaAvailable() {
++        FakePost hidden = verifiedPost("hidden", VerifiedType.User, "other", "hidden");
++        FakePost visible = verifiedPost("visible", VerifiedType.NotVerified, "visible", "visible");
++        List<Object> raw = items(module("profile-media", item(hidden), item(visible)));
++        NewXTimelineFilter.ResultMemo memo = new NewXTimelineFilter.ResultMemo();
++        for (int pass = 0; pass < 2; pass++) {
++            List<?> filtered = filterVerifiedMemoized(raw, Set.of("User"), MODELS, memo);
++            assertEquals(List.of(visible), NewXTimelineFilter.mediaItemsForProfileDownload(filtered, MODELS));
++            assertEquals(List.of(hidden, visible), NewXTimelineFilter.mediaItemsForProfileDownload(raw, MODELS));
++        }
+     }
+ 
+     @Test

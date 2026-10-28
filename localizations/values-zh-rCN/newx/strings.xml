@@ -1334,4 +1334,5 @@
     <string name="piko_newx_fs_xlite_video_playback_vertical_fill_enabled">启用 X-Lite 视频播放竖向填充</string>
     <string name="piko_newx_fs_xlite_video_playback_vertical_fill_status_bar_top_enabled">启用 X-Lite 视频播放竖向填充状态栏顶部</string>
     <string name="piko_newx_fs_xlite_video_playback_video_top_lift_enabled">启用 X-Lite 视频播放视频顶部上移</string>
+    <string name="piko_newx_fs_x_lite_profile_photos_videos_tabs_enabled">启用个人资料照片和视频标签页</string>
 </resources>
