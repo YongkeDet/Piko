@@ -49,6 +49,7 @@ https://raw.githubusercontent.com/YongkeDet/Piko/main/patches-bundle.json
 云端使用 `UPSTREAM.json` 固定的源码及构建脚本，并应用 `source-patches/`。工作流验证中文资源和占位符，运行分页与时间线测试、NewX resolver 检查和完整构建，生成补丁包、构建信息及 SHA-256 校验值。沿用上游兼容列表：X `12.34.0-prod.01`、`12.35.0-prod.01`、`12.36.1-prod.01` 以及 `12.37.0-prod.01`、`12.37.1-prod.01`、`12.37.2-prod.01`；主页批量下载支持 12.35、12.36.1 和 12.37.2。补丁引擎升级为 Morphe Patcher 2.0，需要使用支持该引擎的 Morphe（离线验证使用官方 Morphe Desktop 1.19.0）。仓库不包含第三方 X 安装包。
 
 - X.26.17 单独发布，更新前 main 为 `backup/before-X.26.17`（`d641fe306947fe942d0b6a6776a340ca5ea5f991`）；X.26.16 及此前标签和发布产物保留。
+- X.26.16 单独发布，回退基线为 `backup/before-X.26.16`（`aa58d7d4b946a3a1010e8fc72a1cd55e877d5c88`）；X.26.15 及此前资产保留。
 - X.26.15 单独发布，更新前 main 保存在 `backup/before-X.26.15`（`f29c16237275e2a01debffd322ef0be5f442d2e1`），X.26.11 的标签与发布产物保留。
 - X.26.11 单独发布，更新前的 main 保存在 `backup/before-X.26.11`（`1223942160541711ac16bacca252a299f550958a`）；X.26.10、X.26.04 及此前版本的标签和发布产物保留。
 - 更新前已发布源码：`backup/before-X.26.10`（`9beddd580ecf928e1b034c9132c1fa1f32eb712e`）。
