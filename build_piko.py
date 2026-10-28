@@ -282,7 +282,7 @@ def build_piko_patches(
 
         # Run real extension regressions for upstream caches and patch/user override precedence.
         subprocess.run(
-            ["./gradlew", ":extensions:newx:testReleaseUnitTest",
+            ["./gradlew", ":extensions:newx:testDebugUnitTest",
              "--tests", "app.morphe.extension.newx.timeline.NewXTimelineFilterTest",
              "--tests", "app.morphe.extension.newx.featureswitches.FeatureSwitchStoreTest",
              "--tests", "app.morphe.extension.newx.utils.NewXUtilsTest",
