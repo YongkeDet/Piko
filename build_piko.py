@@ -18,44 +18,6 @@ XLITE_CONSTANTS = (
 NEWX_CHINESE_STRINGS = Path("values-zh-rCN/newx/strings.xml")
 
 
-def test_timeline_refresh_policy(piko_directory: Path) -> None:
-    """Run JUnit against the patched production class without an Android test variant."""
-    android_home = os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT")
-    if not android_home:
-        raise RuntimeError("Android SDK is required for refresh policy tests")
-    android_jar = Path(android_home) / "platforms/android-36/android.jar"
-    if not android_jar.is_file():
-        raise FileNotFoundError(android_jar)
-    work = piko_directory.parent / "timeline-refresh-tests"
-    classes = work / "classes"
-    classes.mkdir(parents=True, exist_ok=True)
-    dependencies = [
-        ("junit-4.13.2.jar", "https://repo.maven.apache.org/maven2/junit/junit/4.13.2/junit-4.13.2.jar"),
-        ("hamcrest-core-1.3.jar", "https://repo.maven.apache.org/maven2/org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.jar"),
-    ]
-    for name, url in dependencies:
-        urlretrieve(url, work / name)
-    classpath = os.pathsep.join(str(path) for path in [android_jar, *(work / name for name, _ in dependencies)])
-    relative = "app/morphe/extension/newx/timeline"
-    subprocess.run(
-        [
-            "javac", "--release", "17", "-encoding", "UTF-8", "-cp", classpath,
-            "-d", str(classes),
-            str(piko_directory / f"extensions/newx/src/main/java/{relative}/TimelineRefreshGate.java"),
-            str(piko_directory / f"extensions/newx/src/test/java/{relative}/TimelineRefreshGateTest.java"),
-        ],
-        check=True,
-    )
-    subprocess.run(
-        [
-            "java", "-cp", str(classes) + os.pathsep + classpath,
-            "org.junit.runner.JUnitCore",
-            "app.morphe.extension.newx.timeline.TimelineRefreshGateTest",
-        ],
-        check=True,
-    )
-
-
 def apply_download_dialog_localization(piko_directory: Path) -> None:
     """Apply versioned source fixes and connect download display text to resources."""
     root = Path(__file__).resolve().parent
@@ -270,7 +232,6 @@ def build_piko_patches(
         apply_download_dialog_localization(piko_directory)
         apply_chinese_localization(piko_directory)
         set_project_version(piko_directory, patch_version)
-        test_timeline_refresh_policy(piko_directory)
         test_profile_bulk_pager(piko_directory)
 
         subprocess.run(
@@ -287,6 +248,10 @@ def build_piko_patches(
              "--tests", "app.morphe.extension.newx.featureswitches.FeatureSwitchStoreTest",
              "--tests", "app.morphe.extension.newx.utils.NewXUtilsTest",
              "--tests", "app.morphe.extension.newx.theme.DynamicColorPaletteTest",
+             "--tests", "app.morphe.extension.newx.timeline.TimelineRefreshGateTest",
+             "--tests", "app.morphe.extension.newx.translation.PostTranslatorTest",
+             "--tests", "app.morphe.extension.newx.misc.ShareUrlResolverTest",
+             "--tests", "app.morphe.extension.newx.misc.InlineDownloadButtonTest",
              "--no-daemon"],
             cwd=piko_directory, env=os.environ.copy(), check=True,
         )

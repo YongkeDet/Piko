@@ -1,0 +1,263 @@
+--- a/extensions/newx/src/main/java/app/morphe/extension/newx/translation/TranslatorFragment.java
++++ b/extensions/newx/src/main/java/app/morphe/extension/newx/translation/TranslatorFragment.java
+@@ -26,6 +26,7 @@
+ import java.util.Map;
+ 
+ import app.morphe.extension.shared.Utils;
++import app.morphe.extension.shared.StringRef;
+ import app.morphe.extension.newx.settings.NewXSettingsActivity;
+ import app.morphe.extension.newx.ui.Theme;
+ import app.morphe.extension.crimera.settings.CustomScreenFragment;
+@@ -58,17 +59,17 @@
+         scroll.addView(content, new FrameLayout.LayoutParams(-1, -2));
+         root.addView(scroll, matchParent());
+ 
+-        content.addView(sectionHeader(context, "Translator"), new LinearLayout.LayoutParams(-1, -2));
++        content.addView(sectionHeader(context, StringRef.str("piko_newx_translation_ui_translator")), new LinearLayout.LayoutParams(-1, -2));
+         providerRows = new LinearLayout(context);
+         providerRows.setOrientation(LinearLayout.VERTICAL);
+         content.addView(providerRows, new LinearLayout.LayoutParams(-1, -2));
+ 
+-        ButtonView addButton = SettingsUi.dialogButton(context, "Add custom translator");
++        ButtonView addButton = SettingsUi.dialogButton(context, StringRef.str("piko_newx_translation_ui_add_custom"));
+         addButton.setOnClickListener(ignored -> showProviderTray(null));
+         content.addView(addButton, new LinearLayout.LayoutParams(-1, Theme.dpToPx(context, 48f)));
+ 
+         content.addView(SettingsUi.divider(context));
+-        content.addView(sectionHeader(context, "Translate to"), new LinearLayout.LayoutParams(-1, -2));
++        content.addView(sectionHeader(context, StringRef.str("piko_newx_translation_ui_target")), new LinearLayout.LayoutParams(-1, -2));
+         content.addView(languageRow(context), new LinearLayout.LayoutParams(-1, -2));
+ 
+         refresh();
+@@ -80,7 +81,7 @@
+         super.onResume();
+         Activity activity = getActivity();
+         if (activity instanceof NewXSettingsActivity settingsActivity) {
+-            settingsActivity.setPageTitle("Translator");
++            settingsActivity.setPageTitle(StringRef.str("piko_newx_translation_ui_translator"));
+         }
+         refresh();
+     }
+@@ -140,10 +141,10 @@
+         options.setOrientation(LinearLayout.VERTICAL);
+ 
+         TrayView tray = new TrayView(context)
+-                .setTitle("Translate to")
++                .setTitle(StringRef.str("piko_newx_translation_ui_target"))
+                 .setScrollableBodyView(options);
+         for (String[] choice : TranslatorConfig.targetLanguageChoices()) {
+-            ChoiceRow row = SettingsUi.choiceRow(context, choice[1], choice[0].equals(current), false);
++            ChoiceRow row = SettingsUi.choiceRow(context, languageName(choice[0]), choice[0].equals(current), false);
+             row.setOnCheckedChangeListener(checked -> {
+                 if (!checked) return;
+                 config.setTargetLanguage(choice[0]);
+@@ -159,10 +160,10 @@
+         Context context = requireContext();
+         ProviderForm form = new ProviderForm(context, editing);
+         TrayView tray = new TrayView(context)
+-                .setTitle(editing == null ? "Add translator" : "Edit translator")
++                .setTitle(editing == null ? StringRef.str("piko_newx_translation_ui_add") : StringRef.str("piko_newx_translation_ui_edit"))
+                 .setScrollableBodyView(form.body);
+ 
+-        ButtonView save = SettingsUi.sheetButton(context, "Save");
++        ButtonView save = SettingsUi.sheetButton(context, StringRef.str("piko_newx_translation_ui_save"));
+         save.setOnClickListener(ignored -> {
+             TranslatorConfig.CustomProvider draft = form.draft();
+             try {
+@@ -183,14 +184,14 @@
+         });
+         tray.addButton(save);
+ 
+-        ButtonView test = new ButtonView(context, ButtonView.ButtonStyle.TONAL, "Test");
++        ButtonView test = new ButtonView(context, ButtonView.ButtonStyle.TONAL, StringRef.str("piko_newx_translation_ui_test"));
+         test.setPill(true);
+         test.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+         test.setOnClickListener(ignored -> runTest(form.draft()));
+         tray.addButton(test);
+ 
+         if (editing != null) {
+-            ButtonView delete = SettingsUi.dialogButton(context, "Delete");
++            ButtonView delete = SettingsUi.dialogButton(context, StringRef.str("piko_newx_translation_ui_delete"));
+             delete.setTextColor(Color.rgb(244, 33, 46));
+             delete.setOnClickListener(ignored -> {
+                 config.removeCustom(editing.id);
+@@ -208,9 +209,9 @@
+             try {
+                 TranslationResult result = TranslatorConfig.providerFor(draft)
+                         .translateText("Hola mundo", null, "en");
+-                Utils.runOnMainThread(() -> Utils.showToastShort("Test OK: " + result.text));
++                Utils.runOnMainThread(() -> Utils.showToastShort(StringRef.str("piko_newx_translation_ui_test_ok", result.text)));
+             } catch (Exception exception) {
+-                Utils.runOnMainThread(() -> Utils.showToastShort("Test failed: " + errorMessage(exception)));
++                Utils.runOnMainThread(() -> Utils.showToastShort(StringRef.str("piko_newx_translation_ui_test_failed", errorMessage(exception))));
+             }
+         });
+     }
+@@ -246,26 +247,35 @@
+     @Nullable
+     private static String summaryFor(String id, @Nullable TranslatorConfig.CustomProvider custom) {
+         if (custom != null) return customSummary(custom);
+-        if (TranslatorConfig.GOOGLE_ID.equals(id)) return "Free · translates post text";
+-        if (TranslatorConfig.FXTWITTER_ID.equals(id)) return "Free · translates the whole post by ID";
++        if (TranslatorConfig.GOOGLE_ID.equals(id)) return StringRef.str("piko_newx_translation_ui_google_summary");
++        if (TranslatorConfig.FXTWITTER_ID.equals(id)) return StringRef.str("piko_newx_translation_ui_fx_summary");
+         return null;
+     }
+ 
+     private static String customSummary(TranslatorConfig.CustomProvider custom) {
+-        StringBuilder summary = new StringBuilder(custom.type.label);
++        StringBuilder summary = new StringBuilder(custom.type == TranslatorConfig.CustomType.OPENAI ? StringRef.str("piko_newx_translation_ui_openai") : custom.type.label);
+         if (!TextUtils.isEmpty(custom.url)) summary.append(" · ").append(custom.url);
+         if (!TextUtils.isEmpty(custom.model)) summary.append(" · ").append(custom.model);
+         return summary.toString();
+     }
+ 
+     private static String languageName(String tag) {
+-        for (String[] choice : TranslatorConfig.targetLanguageChoices()) {
+-            if (choice[0].equals(tag)) return choice[1];
+-        }
+-        return tag;
++        if (tag == null || tag.isEmpty()) return StringRef.str("piko_newx_translation_ui_device_language");
++        String display = java.util.Locale.forLanguageTag(tag).getDisplayName(java.util.Locale.getDefault());
++        return display.isEmpty() ? tag : display;
+     }
+ 
+     private static String errorMessage(Exception exception) {
++        if (exception.getMessage() != null) {
++            String localized = switch (exception.getMessage()) {
++                case "Enter a name" -> StringRef.str("piko_newx_translation_ui_enter_name");
++                case "Enter a valid URL" -> StringRef.str("piko_newx_translation_ui_enter_url");
++                case "Enter a model" -> StringRef.str("piko_newx_translation_ui_enter_model");
++                case "Enter an API key" -> StringRef.str("piko_newx_translation_ui_enter_key");
++                default -> null;
++            };
++            if (localized != null) return localized;
++        }
+         return TextUtils.isEmpty(exception.getMessage())
+                 ? exception.getClass().getSimpleName()
+                 : exception.getMessage();
+@@ -322,19 +332,19 @@
+             );
+ 
+             for (TranslatorConfig.CustomType option : TranslatorConfig.CustomType.values()) {
+-                ChoiceRow row = SettingsUi.choiceRow(context, option.label, false, false);
++                ChoiceRow row = SettingsUi.choiceRow(context, option == TranslatorConfig.CustomType.OPENAI ? StringRef.str("piko_newx_translation_ui_openai") : option.label, false, false);
+                 row.setOnCheckedChangeListener(checked -> select(option));
+                 typeRows.put(option, row);
+                 body.addView(row, new LinearLayout.LayoutParams(-1, -2));
+             }
+ 
+-            name = SettingsUi.textInput(context, "Name", InputType.TYPE_CLASS_TEXT);
++            name = SettingsUi.textInput(context, StringRef.str("piko_newx_translation_ui_name"), InputType.TYPE_CLASS_TEXT);
+             name.setText(editing == null ? "" : editing.name);
+             body.addView(name, fieldParams(context));
+ 
+             url = SettingsUi.textInput(
+                     context,
+-                    "URL",
++                    StringRef.str("piko_newx_translation_ui_url"),
+                     InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI
+             );
+             url.setText(editing == null ? "" : editing.url);
+@@ -343,13 +353,13 @@
+             urlHint = SettingsUi.summaryText(context);
+             body.addView(urlHint, fieldParams(context));
+ 
+-            model = SettingsUi.textInput(context, "Model", InputType.TYPE_CLASS_TEXT);
++            model = SettingsUi.textInput(context, StringRef.str("piko_newx_translation_ui_model"), InputType.TYPE_CLASS_TEXT);
+             model.setText(editing == null ? "" : editing.model);
+             body.addView(model, fieldParams(context));
+ 
+             apiKey = SettingsUi.textInput(
+                     context,
+-                    "API key",
++                    StringRef.str("piko_newx_translation_ui_api_key"),
+                     InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD
+             );
+             apiKey.setText(editing == null ? "" : editing.apiKey);
+@@ -396,8 +406,8 @@
+ 
+             model.setVisibility(type == TranslatorConfig.CustomType.OPENAI ? View.VISIBLE : View.GONE);
+             apiKey.setHint(type == TranslatorConfig.CustomType.LIBRETRANSLATE
+-                    ? "API key (optional)"
+-                    : "API key");
++                    ? StringRef.str("piko_newx_translation_ui_api_key_optional")
++                    : StringRef.str("piko_newx_translation_ui_api_key"));
+         }
+ 
+         @Nullable
+@@ -412,8 +422,8 @@
+         @Nullable
+         private static String hint(TranslatorConfig.CustomType type) {
+             return switch (type) {
+-                case OPENAI -> OPENAI_HINT;
+-                case DEEPL -> DEEPL_HINT;
++                case OPENAI -> StringRef.str("piko_newx_translation_ui_openai_hint");
++                case DEEPL -> StringRef.str("piko_newx_translation_ui_deepl_hint");
+                 case LIBRETRANSLATE -> null;
+             };
+         }
+--- a/extensions/newx/src/main/java/app/morphe/extension/newx/translation/PostTranslator.java
++++ b/extensions/newx/src/main/java/app/morphe/extension/newx/translation/PostTranslator.java
+@@ -33,6 +33,7 @@
+ import app.morphe.extension.newx.settings.NewXLogger;
+ import app.morphe.extension.newx.utils.NewXUtils;
+ import app.morphe.extension.shared.Utils;
++import app.morphe.extension.shared.StringRef;
+ 
+ /**
+  * Runs the selected translation provider for NewX's "Translate" post-menu option and for NewX's
+@@ -360,11 +361,11 @@
+     }
+ 
+     private static String subtitleFor(String providerName, String sourceLanguage, String targetLanguage) {
+-        if (sourceLanguage == null) return "Translated by " + providerName;
++        if (sourceLanguage == null) return StringRef.str("piko_newx_translation_ui_translated_by", providerName);
+         String source = Locale.forLanguageTag(sourceLanguage).getLanguage();
+         String target = Locale.forLanguageTag(targetLanguage).getLanguage();
+         if (source.equals(target)) {
+-            return "Already in " + displayLanguage(targetLanguage) + " · " + providerName;
++            return StringRef.str("piko_newx_translation_ui_already", displayLanguage(targetLanguage), providerName);
+         }
+         return displayLanguage(sourceLanguage) + " → " + displayLanguage(targetLanguage) + " · " + providerName;
+     }
+@@ -382,8 +383,8 @@
+         String target = resolveTargetLanguage();
+ 
+         TrayView sheet = new TrayView(activity);
+-        sheet.setTitle("Translation");
+-        sheet.setSubtitle("Translating…");
++        sheet.setTitle(StringRef.str("piko_newx_translation_ui_translation"));
++        sheet.setSubtitle(StringRef.str("piko_newx_translation_ui_translating"));
+ 
+         // The original text stays visible until the provider answers.
+         TextView body = SettingsUi.titleText(activity);
+@@ -401,7 +402,7 @@
+ 
+         // Only read and written on the UI thread.
+         String[] translatedText = new String[1];
+-        ButtonView copy = SettingsUi.sheetButton(activity, "Copy translation");
++        ButtonView copy = SettingsUi.sheetButton(activity, StringRef.str("piko_newx_translation_ui_copy"));
+         copy.setEnabled(false);
+         copy.setOnClickListener(ignored -> {
+             String value = translatedText[0];
+@@ -409,8 +410,8 @@
+             ClipboardManager clipboard =
+                     (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
+             if (clipboard == null) return;
+-            clipboard.setPrimaryClip(ClipData.newPlainText("Translation", value));
+-            Utils.showToastShort("Copied translation");
++            clipboard.setPrimaryClip(ClipData.newPlainText(StringRef.str("piko_newx_translation_ui_translation"), value));
++            Utils.showToastShort(StringRef.str("piko_newx_translation_ui_copied"));
+         });
+         sheet.addButton(copy);
+         sheet.show();
+@@ -441,7 +442,7 @@
+         NewXLogger.printException(() -> "NewX translation request failed", exception);
+         NewXUtils.runOnUiThread(() -> {
+             if (sheet.isShowing()) {
+-                sheet.setSubtitle("Could not translate this post. Check your connection and try again.");
++                sheet.setSubtitle(StringRef.str("piko_newx_translation_ui_failed"));
+             }
+         });
+     }
