@@ -5,3 +5,12 @@
 `RELEASE.json` 声明当前版本，`UPSTREAM.json` 固定上游版本和源码；`build_cloud.release_version` 在构建与工作流入口校验二者对应关系。补丁包内部 Manifest、文件名、构建信息、Git 标签、发布标题和订阅均由同一版本值生成。
 
 本次继续使用上游 v3.73.0 / `340dd024aa889a5e116550039eafceeb45a85107`，六组源码覆盖、1361 条中文资源和 797 个开关名称保持相同。X 12.39.0-prod.01 的完整 APKM、同源 base 的原有 51/51 验证见 [升级记录](newx-resolver-linter/2026-11-02-x-26-18-upgrade.md)。此次重新构建后比较归档内容，确认只有版本元数据发生预期变化。
+
+## 发布验证
+
+- 正式提交 `24a5ca2a47090c92e5655fbadd87b4b1646bfbc8`，工作流 [41431973884](https://github.com/YongkeDet/Piko/actions/runs/41431973884) 完整构建、设置聚合、resolver lint、分页及八组扩展回归成功。
+- [X3.73.0 发布](https://github.com/YongkeDet/Piko/releases/tag/X3.73.0)，固定订阅提交 `bff4db16c29007156f943b8b08f35016c59febeb`，下载文件为 `X3.73.0.mpp`。
+- MPP SHA-256：`79d73d4eac4b11a28bf1a466150269d32aa3026f5fee7165804b6b153720ccb6`。四个发布资产摘要与本地一致，SHA256SUMS 通过。
+- 1138 个归档条目中 1137 个逐字节相同，唯一变化为 Manifest 的 Version 和 Timestamp；删除这两个字段后内容相同。补丁字节码、扩展、资源与已验证的 X.26.18 一致，MPP 内部版本为 X3.73.0。本次没有重复安装包应用或实机验证。
+- 原十个发布与其全部资产 ID、名称和摘要保持相同。交付目录 `dist/X3.73.0/`，历史包仍保留。
+- 本地校验当前及后续版本命名、拒绝旧格式和与上游不一致的版本；工作流入口与构建入口共用相同校验函数。
