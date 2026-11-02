@@ -1,6 +1,8 @@
 # Piko 中文补丁
 
-当前版本 **X.26.18**，基于上游 v3.73.0，目标为 **X 12.39.0-prod.01**。共 1361 条中文资源，含 797 个功能开关名称。
+当前版本 **X3.73.0**，基于上游 v3.73.0，目标为 **X 12.39.0-prod.01**。共 1361 条中文资源，含 797 个功能开关名称。
+
+版本名与上游保持一致并加 `X` 前缀，例如上游 `v3.73.0` 对应 `X3.73.0`。本次将 X.26.18 更名为 X3.73.0，功能和适配目标相同；旧发布作为历史保留。
 
 同步新翻译器、永久链接、移除分享追踪参数、用户 ID 文件名模板，以及深链返回下载、时间线缓存裁剪、照片网格底部重复留白等修复。保留本仓库批量下载、分页保护、手动刷新和作者子目录。翻译器设置、语言选择与结果面板使用中文资源，接口地址、密钥、模型名称及存储格式保持原样；实际翻译请求由用户选择的提供方处理。
 
@@ -44,12 +46,13 @@ https://github.com/YongkeDet/Piko
 https://raw.githubusercontent.com/YongkeDet/Piko/main/patches-bundle.json
 ```
 
-固定来源地址不变，检查更新即可获取 X.26.18；已安装的 X 需要重新应用补丁后更新安装。也可在 [X.26.18 发布页](https://github.com/YongkeDet/Piko/releases/tag/X.26.18) 下载 `.mpp`。来源格式遵循 [Morphe 官方说明](https://github.com/MorpheApp/morphe-manager/blob/main/docs/patch-sources.md)。订阅仅在构建和发布成功后更新。
+固定来源地址不变，刷新即可获取 X3.73.0；已安装的 X 需要重新应用补丁后更新安装。也可在 [X3.73.0 发布页](https://github.com/YongkeDet/Piko/releases/tag/X3.73.0) 下载 `.mpp`。来源格式遵循 [Morphe 官方说明](https://github.com/MorpheApp/morphe-manager/blob/main/docs/patch-sources.md)。订阅仅在构建和发布成功后更新。
 
 ## 构建与回退
 
 云端使用 `UPSTREAM.json` 固定的源码及构建脚本，并应用 `source-patches/`。工作流验证中文资源和占位符，运行分页与时间线测试、NewX resolver 检查和完整构建，生成补丁包、构建信息及 SHA-256 校验值。本版以 12.39.0 生产版为目标；旧目标使用已保留的旧发布。补丁引擎升级为 Morphe Patcher 2.0，需要使用支持该引擎的 Morphe（离线验证使用官方 Morphe Desktop 1.19.0）。仓库不包含第三方 X 安装包。
 
+- X3.73.0 按上游版本重新命名并构建，规则及验证见 [版本命名记录](docs/2026-11-02-upstream-version-naming.md)。
 - X.26.18 单独发布，升级前 main 为 `backup/before-X.26.18`（`89cf1f94d25c6a8e63373ca36f31d9b0fad44a72`），旧版与全部资产保留。
 - X.26.17 单独发布，更新前 main 为 `backup/before-X.26.17`（`d641fe306947fe942d0b6a6776a340ca5ea5f991`）；X.26.16 及此前标签和发布产物保留。
 - X.26.16 单独发布，回退基线为 `backup/before-X.26.16`（`aa58d7d4b946a3a1010e8fc72a1cd55e877d5c88`）；X.26.15 及此前资产保留。
@@ -58,7 +61,7 @@ https://raw.githubusercontent.com/YongkeDet/Piko/main/patches-bundle.json
 - 更新前已发布源码：`backup/before-X.26.10`（`9beddd580ecf928e1b034c9132c1fa1f32eb712e`）。
 - 此前 API 下载预览：`backup/profile-api-preview-before-X.26.10`（`5708520271180cdc648d26e783544996ef43484d`）。
 - 回退补丁时下载旧 Releases 中的 `.mpp`；查看旧源码时从对应标签或备份分支创建分支，保留现有历史。
-- 后续发布修改 `RELEASE.json` 版本号后提交即可。每次发布的 `build-info.json` 记录源码、覆盖补丁及产物校验值。
+- 后续升级同步更新 `UPSTREAM.json` 和 `RELEASE.json`，版本名必须为 `X` 加上游版本号（去掉上游的 `v` 前缀）。构建入口与工作流共同校验，避免发布不同版本号。每次发布的 `build-info.json` 记录源码、覆盖补丁及产物校验值。
 
 ## 来源与许可
 

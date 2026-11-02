@@ -42,8 +42,7 @@ jobs:
       - name: Read release version
         id: release
         run: |
-          VERSION=$(python3 -c 'import json; print(json.load(open("RELEASE.json"))["version"])')
-          [[ "$VERSION" =~ ^X\.[0-9]{2}\.[0-9]{2}$ ]]
+          VERSION=$(python3 -c 'import json; from build_cloud import release_version; print(release_version(json.load(open("RELEASE.json")), json.load(open("UPSTREAM.json"))))')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-java@v4
         with:

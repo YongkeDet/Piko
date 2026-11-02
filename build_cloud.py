@@ -12,13 +12,21 @@ from pathlib import Path
 from build_piko import build_piko_patches
 
 
+def release_version(release: dict, upstream: dict) -> str:
+    upstream_version = upstream["upstream_version"].removeprefix("v")
+    if re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?", upstream_version) is None:
+        raise ValueError("The upstream version must be a semantic version")
+    expected = f"X{upstream_version}"
+    if release["version"] != expected:
+        raise ValueError(f"Release names must match the upstream version: {expected}")
+    return expected
+
+
 def main() -> None:
     root = Path(__file__).resolve().parent
     release = json.loads((root / "RELEASE.json").read_text(encoding="utf-8"))
     upstream = json.loads((root / "UPSTREAM.json").read_text(encoding="utf-8"))
-    version = release["version"]
-    if re.fullmatch(r"X\.\d{2}\.\d{2}", version) is None:
-        raise ValueError("Release names must use X.YY.NN, for example X.26.01")
+    version = release_version(release, upstream)
     translation = root / "localizations/values-zh-rCN/newx/strings.xml"
     if len(ET.parse(translation).getroot()) != release["translated_strings"]:
         raise ValueError("The release string count does not match the translation")
