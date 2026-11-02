@@ -9,9 +9,9 @@
  APK="$DEFAULT_APK"
  FLAGS=()
  for arg in "$@"; do
-@@ -85,6 +85,7 @@
-   -e "NewX: Custom font" \
-   -e "NewX: Custom sharing domain" \
+@@ -87,6 +87,7 @@
+   -e "NewX: Remove share tracking parameters" \
+   -e "NewX: Permanent share links" \
    -e "NewX: Inline download button" \
 +  -e "NewX: Download all profile media" \
    -e "NewX: Redirect downloads to chosen folder" \
@@ -19,7 +19,7 @@
    -e "NewX: Set default reply sorting" \
 --- a/extensions/newx/src/main/java/app/morphe/extension/newx/misc/InlineDownloadButton.java
 +++ b/extensions/newx/src/main/java/app/morphe/extension/newx/misc/InlineDownloadButton.java
-@@ -527,7 +527,7 @@
+@@ -529,7 +529,7 @@
          return null;
      }
  
@@ -28,7 +28,7 @@
          if (url == null) return null;
          int cut = url.length();
          int query = url.indexOf('?');
-@@ -1030,7 +1030,7 @@
+@@ -1032,7 +1032,7 @@
       * shown. Photos use the exact twimg size tiers; videos and GIFs use a best-effort variant
       * policy since the model has no per-variant resolution field.
       */
@@ -37,7 +37,7 @@
          if (item == null || item.resolutionOptions.size() <= 1) return null;
  
          if (isImageItem(item)) {
-@@ -1222,7 +1222,25 @@
+@@ -1224,7 +1224,25 @@
              ConflictPolicy policy,
              boolean explicitResolution
      ) {
@@ -64,7 +64,7 @@
  
          final NewXDownloadFolders.MediaKind kind;
          try {
-@@ -1232,7 +1250,7 @@
+@@ -1234,7 +1252,7 @@
                      () -> "Unsupported NewX download media type: " + download.mimeType,
                      exception
              );
@@ -73,7 +73,7 @@
          }
  
          String template = DownloadSettings.filenameTemplate();
-@@ -1254,7 +1272,7 @@
+@@ -1256,7 +1274,7 @@
  
          DownloadEngine engine = NewXDownloader.get();
          if (engine == null) {
@@ -82,7 +82,7 @@
          }
  
          final Uri destinationTree = NewXDownloadFolders.treeUri(kind);
-@@ -1276,17 +1294,18 @@
+@@ -1278,17 +1296,18 @@
              );
          } catch (IllegalArgumentException exception) {
              NewXLogger.printException(() -> "Invalid NewX download request: " + resolvedFileName, exception);
@@ -159,7 +159,7 @@
      }
  
      private static final Object PENDING_PHOTO_LOCK = new Object();
-@@ -249,6 +257,15 @@
+@@ -242,6 +250,15 @@
              content.setOrientation(LinearLayout.VERTICAL);
              content.setBackgroundColor(Color.TRANSPARENT);
  
@@ -175,7 +175,7 @@
              grid = new GalleryGrid(context);
              grid.setItemClickCallback(itemClickCallback);
              content.addView(grid, new LinearLayout.LayoutParams(
-@@ -347,6 +364,7 @@
+@@ -339,6 +356,7 @@
          }
  
          private void checkLoadMore() {
@@ -1717,7 +1717,7 @@
 +}
 --- a/patches/src/main/kotlin/app/crimera/patches/newx/misc/mediatab/ProfilePhotosGalleryPatch.kt
 +++ b/patches/src/main/kotlin/app/crimera/patches/newx/misc/mediatab/ProfilePhotosGalleryPatch.kt
-@@ -96,16 +96,17 @@
+@@ -95,16 +95,17 @@
      val paddingBottom: Method,
      val androidView: Method,
  )
@@ -1737,7 +1737,7 @@
      val stateType: String,
      val stateFlowGetter: NativeMethodCall,
      val stateValueGetter: NativeMethodCall,
-@@ -388,7 +389,7 @@
+@@ -387,7 +388,7 @@
  
  
  context(context: BytecodePatchContext)
@@ -1746,7 +1746,7 @@
      val classByType = classDefs.associateBy { it.type }
      val dispatchCandidates = classDefs.flatMap { classDef ->
          if (!classDef.type.startsWith(BOTTOM_PAGING_SCOPE)) {
-@@ -577,6 +578,7 @@
+@@ -576,6 +577,7 @@
              .removePrefix("L")
              .removeSuffix(";")
              .replace('/', '.'),
@@ -1754,7 +1754,7 @@
          state = ResolvedPagingState(
              stateType = stateType,
              stateFlowGetter = stateFlowGetterCall,
-@@ -895,7 +897,7 @@
+@@ -887,7 +889,7 @@
          ?: throw PatchException("NewX timeline item click callback is not a renderer parameter")
  }
  
@@ -1763,7 +1763,7 @@
      val descriptor: String,
      val opcode: Opcode,
  )
-@@ -957,7 +959,7 @@
+@@ -949,7 +951,7 @@
          opcode = invocationOpcode(definingClass),
      )
  
@@ -1772,7 +1772,7 @@
      type: String,
      classByType: Map<String, ClassDef>,
  ): Boolean {
-@@ -971,7 +973,7 @@
+@@ -963,7 +965,7 @@
  }
  
  context(context: BytecodePatchContext)
@@ -1781,7 +1781,7 @@
      flowType: String,
      classByType: Map<String, ClassDef>,
  ): NativeMethodCall {
-@@ -1570,6 +1572,33 @@
+@@ -1550,6 +1552,33 @@
      val classDefs = allClassDefs()
      val event = resolveNativePhotoViewerTarget(classDefs, timelineListDescriptor)
      val (targets, delegates) = resolveItemClickViewerTargets(event, classDefs)
@@ -1860,7 +1860,7 @@
          }
 --- a/patches/src/main/kotlin/app/crimera/patches/newx/utils/Constants.kt
 +++ b/patches/src/main/kotlin/app/crimera/patches/newx/utils/Constants.kt
-@@ -5,6 +5,20 @@
+@@ -5,6 +5,18 @@
  import app.morphe.patcher.patch.Compatibility
  
  internal object Constants {
@@ -1872,9 +1872,7 @@
 +            apkFileType = ApkFileType.APKM,
 +            appIconColor = 0x000000,
 +            targets = listOf(
-+                AppTarget(version = "12.35.0-prod.01"),
-+                AppTarget(version = "12.36.1-prod.01"),
-+                AppTarget(version = "12.37.2-prod.01"),
++                AppTarget(version = "12.39.0-prod.01"),
 +            ),
 +        )
 +

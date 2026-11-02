@@ -1,11 +1,9 @@
 --- a/extensions/newx/src/main/java/app/morphe/extension/newx/timeline/TimelineRefreshGate.java
 +++ b/extensions/newx/src/main/java/app/morphe/extension/newx/timeline/TimelineRefreshGate.java
-@@ -44,6 +44,16 @@
+@@ -67,6 +67,16 @@
+         return consumed;
+     }
  
-     public static boolean consumeForYouFilterRefresh() {
-         return consume(pendingForYouFilterRefreshDeadline);
-+    }
-+
 +    /** Preserve initial loads and paging; replacing an existing list requires a pull gesture. */
 +    public static boolean shouldAllowRequest(Enum<?> requestType, List<?> pages) {
 +        if (isTimelineDataEmpty(pages)) return true;
@@ -14,12 +12,14 @@
 +            case "PULL_TO_REFRESH", "OLDER_THAN", "GAP" -> true;
 +            default -> false;
 +        };
-     }
- 
++    }
++
      public static boolean isTimelineDataEmpty(List<?> pages) {
+         if (pages == null || pages.isEmpty()) return true;
+ 
 --- a/patches/src/main/kotlin/app/crimera/patches/newx/timeline/DisableTimelineRefreshPatch.kt
 +++ b/patches/src/main/kotlin/app/crimera/patches/newx/timeline/DisableTimelineRefreshPatch.kt
-@@ -51,20 +51,15 @@
+@@ -55,14 +55,6 @@
  private const val GET_INTENT_DESCRIPTOR = "Landroid/app/Activity;->getIntent()$INTENT_DESCRIPTOR"
  private const val MARK_POST_DEEP_LINK_DESCRIPTOR =
      "$TIMELINE_REFRESH_GATE_DESCRIPTOR->markPostDeepLink($INTENT_DESCRIPTOR)V"
@@ -33,7 +33,8 @@
 -    "$TIMELINE_REFRESH_GATE_DESCRIPTOR->isForYouFilterRefreshPending()Z"
  private const val IS_TIMELINE_DATA_EMPTY_DESCRIPTOR =
      "$TIMELINE_REFRESH_GATE_DESCRIPTOR->isTimelineDataEmpty($LIST_DESCRIPTOR)Z"
- private const val RESTORE_TIMELINE_POSITION_DESCRIPTOR =
+ private const val MARK_RESTORE_REFRESH_DESCRIPTOR =
+@@ -74,6 +66,9 @@
      "$TIMELINE_POSITION_STORE_DESCRIPTOR->restore($ENUM_DESCRIPTOR$STRING_DESCRIPTOR)[I"
  private const val URT_SUPPRESS_LABEL = "piko_newx_refresh_urt_suppress"
  private const val URT_CHECK_POSITION_LABEL = "piko_newx_refresh_urt_check_position"
@@ -43,7 +44,7 @@
  
  private object NewXMainActivityOnCreateFingerprint : Fingerprint(
      definingClass = "Lcom/x/android/main/MainActivity;",
-@@ -155,7 +150,7 @@
+@@ -174,7 +169,7 @@
  val disableTimelineRefreshPatch =
      bytecodePatch(
          name = "NewX: Disable automatic timeline refresh",
@@ -52,7 +53,7 @@
      ) {
          unsupportedOnMount()
          compatibleWith(COMPATIBILITY_NEW_X)
-@@ -321,6 +316,16 @@
+@@ -340,6 +335,16 @@
              val requestTypeDescriptor =
                  requestCallReference.parameterTypes.firstOrNull()?.toString()?.takeIf { it.startsWith("L") }
                      ?: throw PatchException("NewX URT repository request has no object request-type parameter")
@@ -69,7 +70,7 @@
              val repositoryClass = mutableClassDefBy(repoDescriptor)
              val timelineGetterMatches =
                  repositoryClass.methods.filter { method ->
-@@ -468,9 +473,8 @@
+@@ -487,9 +492,8 @@
                  val settingRegister = read.register
                  val requestRegister = method.p0Register + 1
                  val cursorRegister = method.p0Register + 2
@@ -81,7 +82,7 @@
                  method.insertHook(
                      index = read.nextIndex,
                      // The setting read sits in front of the hook, so the pool must not hand its
-@@ -483,9 +487,6 @@
+@@ -502,9 +506,6 @@
                      // The timeline value stays live across the enum comparisons.
                      val timelineRegister = scratchRegister()
                      ifEqz(settingRegister, Target.Original)
@@ -91,7 +92,7 @@
                      invokeVirtual(methodReference(repositoryTimelineGetterReference), method.p0Register)
                      moveResult(timelineRegister, timelineEnumDescriptor)
                      for (timelineName in suppressedTimelineNames) {
-@@ -497,21 +498,20 @@
+@@ -516,21 +517,20 @@
                      }
                      goto(Target.Original)
                      label(URT_SUPPRESS_LABEL)
@@ -121,16 +122,16 @@
                      invokeVirtual(methodReference(repositoryTimelineIdentityGetterReference), method.p0Register)
                      moveResult(settingRegister, timelineIdentityDescriptor)
                      iget(settingRegister, settingRegister, timelineIdentityField)
-@@ -524,6 +524,8 @@
-                     ifEqz(settingRegister, Target.Original)
-                     sget(requestRegister, fieldReference(repositoryViewportAwareAutoRefreshFieldReference))
+@@ -545,6 +545,8 @@
+                     // The converted refresh's ClearCache must not drop the restored rows.
+                     invokeStatic(methodReference(MARK_RESTORE_REFRESH_DESCRIPTOR))
                      goto(Target.Original)
 +                    label(URT_BLOCK_LABEL)
 +                    returnVoid()
                  }
              }
  
-@@ -565,12 +567,6 @@
+@@ -586,12 +588,6 @@
                  relocateBranchTargets = true,
              ) {
                  ifEqz(settingRead.register, Target.Original)
@@ -145,7 +146,7 @@
                  invokeInterface(methodReference(timelineDataFlowListGetterReference), settingRead.register)
 --- a/patches/src/main/resources/addresources/values/newx/strings.xml
 +++ b/patches/src/main/resources/addresources/values/newx/strings.xml
-@@ -21,7 +21,7 @@
+@@ -23,7 +23,7 @@
      <string name="piko_newx_backup_restore_summary">Save or restore your Piko NewX settings</string>
  
      <string name="piko_newx_disable_timeline_refresh_title">Disable automatic timeline refresh</string>

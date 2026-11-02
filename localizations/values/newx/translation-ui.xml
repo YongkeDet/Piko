@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="piko_newx_translation_ui_translator">Translator</string>
+    <string name="piko_newx_translation_ui_add_custom">Add custom translator</string>
+    <string name="piko_newx_translation_ui_target">Translate to</string>
+    <string name="piko_newx_translation_ui_add">Add translator</string>
+    <string name="piko_newx_translation_ui_edit">Edit translator</string>
+    <string name="piko_newx_translation_ui_save">Save</string>
+    <string name="piko_newx_translation_ui_test">Test</string>
+    <string name="piko_newx_translation_ui_delete">Delete</string>
+    <string name="piko_newx_translation_ui_name">Name</string>
+    <string name="piko_newx_translation_ui_url">URL</string>
+    <string name="piko_newx_translation_ui_model">Model</string>
+    <string name="piko_newx_translation_ui_api_key">API key</string>
+    <string name="piko_newx_translation_ui_api_key_optional">API key (optional)</string>
+    <string name="piko_newx_translation_ui_google_summary">Free · translates post text</string>
+    <string name="piko_newx_translation_ui_fx_summary">Free · translates the whole post by ID</string>
+    <string name="piko_newx_translation_ui_test_ok">Test OK: %s</string>
+    <string name="piko_newx_translation_ui_test_failed">Test failed: %s</string>
+    <string name="piko_newx_translation_ui_device_language">Device language</string>
+    <string name="piko_newx_translation_ui_openai">OpenAI-compatible</string>
+    <string name="piko_newx_translation_ui_openai_hint">Any OpenAI-compatible API, e.g. https://api.deepseek.com, https://openrouter.ai/api/v1, http://localhost:11434/v1</string>
+    <string name="piko_newx_translation_ui_deepl_hint">Free keys end in :fx and use the free endpoint automatically.</string>
+    <string name="piko_newx_translation_ui_enter_name">Enter a name</string>
+    <string name="piko_newx_translation_ui_enter_url">Enter a valid URL</string>
+    <string name="piko_newx_translation_ui_enter_model">Enter a model</string>
+    <string name="piko_newx_translation_ui_enter_key">Enter an API key</string>
+    <string name="piko_newx_translation_ui_translation">Translation</string>
+    <string name="piko_newx_translation_ui_translating">Translating…</string>
+    <string name="piko_newx_translation_ui_copy">Copy translation</string>
+    <string name="piko_newx_translation_ui_copied">Copied translation</string>
+    <string name="piko_newx_translation_ui_failed">Could not translate this post. Check your connection and try again.</string>
+    <string name="piko_newx_translation_ui_translated_by">Translated by %s</string>
+    <string name="piko_newx_translation_ui_already">Already in %s · %s</string>
+</resources>

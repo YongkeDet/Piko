@@ -1,10 +1,12 @@
 # Piko 中文补丁
 
-当前版本 **X.26.17**（基于上游 v3.66.0，支持 X 12.37.2-prod.01），共 1313 条中文界面文本。
+当前版本 **X.26.18**，基于上游 v3.73.0，目标为 **X 12.39.0-prod.01**。共 1361 条中文资源，含 797 个功能开关名称。
 
-本版采用上游 v3.66.0 及固定的后续源码提交，纳入时间线过滤结果缓存、反射未命中缓存、动态配色和宿主主题读取缓存。新增默认功能开关，启用主页照片/视频标签、排序与 X 原生截图分享，关闭通知和深层链接向主页插入帖子；已有用户覆盖仍优先。保留本仓库全部下载增强和汉化，验证记录见 [X.26.17 升级记录](docs/newx-resolver-linter/2026-10-28-x-26-17-upgrade.md)。性能结果以实际设备使用为准。
+同步新翻译器、永久链接、移除分享追踪参数、用户 ID 文件名模板，以及深链返回下载、时间线缓存裁剪、照片网格底部重复留白等修复。保留本仓库批量下载、分页保护、手动刷新和作者子目录。翻译器设置、语言选择与结果面板使用中文资源，接口地址、密钥、模型名称及存储格式保持原样；实际翻译请求由用户选择的提供方处理。
 
-上游附带的 Root 设备安装后编译脚本不属于 MPP 自动执行功能，本次没有执行安装、重编译或手机控制。
+**上游已移除 X 12.37.2 及更早版本的适配代码。旧安装包请继续使用 X.26.17；本版需选择原始 X 12.39.0-prod.01 完整 APKM 重新应用补丁。** 自定义主页下载仅声明本次验证的 12.39.0 生产版。其余上游声明含 12.38.1 生产版，以及标记实验性的 12.39 / 12.40 alpha；无对应安装包的目标没有另行验证。
+
+验证与回退见 [X.26.18 升级记录](docs/newx-resolver-linter/2026-11-02-x-26-18-upgrade.md)。
 
 ## 管理功能开关中文名称
 
@@ -20,7 +22,7 @@
 
 原生分页结束后显示全部处理完成。连续三页没有新增媒体、重复页面、限流、读取错误或恢复次数达到上限时显示对应停止原因；保护停止不会提示全部完成。翻页进展在分类筛选及文件去重前判断，防止“仅图片”下载遇到视频页时提前停止。选择全部媒体时，图片阶段触发无新增保护后仍会处理视频阶段。
 
-下载功能支持 X `12.35.0-prod.01`、`12.36.1-prod.01` 和 `12.37.2-prod.01`。构建、离线应用补丁和实际使用的验证范围见 [整合记录](docs/newx-resolver-linter/2026-10-23-native-profile-integration.md)。此前 API 方案和分页问题记录保留在 Git 历史及 [实现记录](docs/newx-resolver-linter/2026-10-23-profile-media-download.md)、[分页修复记录](docs/newx-resolver-linter/2026-10-23-profile-pagination.md) 中。
+本版下载功能支持 X `12.39.0-prod.01`；旧目标对应的 X.26.17 发布保留。构建、离线应用补丁和实际使用的验证范围见 [整合记录](docs/newx-resolver-linter/2026-10-23-native-profile-integration.md)。此前 API 方案和分页问题记录保留在 Git 历史及 [实现记录](docs/newx-resolver-linter/2026-10-23-profile-media-download.md)、[分页修复记录](docs/newx-resolver-linter/2026-10-23-profile-pagination.md) 中。
 
 ## 保留功能
 
@@ -42,12 +44,13 @@ https://github.com/YongkeDet/Piko
 https://raw.githubusercontent.com/YongkeDet/Piko/main/patches-bundle.json
 ```
 
-固定来源地址不变，检查更新即可获取 X.26.17；已安装的 X 需要重新应用补丁后更新安装。也可在 [X.26.17 发布页](https://github.com/YongkeDet/Piko/releases/tag/X.26.17) 下载 `.mpp`。来源格式遵循 [Morphe 官方说明](https://github.com/MorpheApp/morphe-manager/blob/main/docs/patch-sources.md)。订阅仅在构建和发布成功后更新。
+固定来源地址不变，检查更新即可获取 X.26.18；已安装的 X 需要重新应用补丁后更新安装。也可在 [X.26.18 发布页](https://github.com/YongkeDet/Piko/releases/tag/X.26.18) 下载 `.mpp`。来源格式遵循 [Morphe 官方说明](https://github.com/MorpheApp/morphe-manager/blob/main/docs/patch-sources.md)。订阅仅在构建和发布成功后更新。
 
 ## 构建与回退
 
-云端使用 `UPSTREAM.json` 固定的源码及构建脚本，并应用 `source-patches/`。工作流验证中文资源和占位符，运行分页与时间线测试、NewX resolver 检查和完整构建，生成补丁包、构建信息及 SHA-256 校验值。沿用上游兼容列表：X `12.34.0-prod.01`、`12.35.0-prod.01`、`12.36.1-prod.01` 以及 `12.37.0-prod.01`、`12.37.1-prod.01`、`12.37.2-prod.01`；主页批量下载支持 12.35、12.36.1 和 12.37.2。补丁引擎升级为 Morphe Patcher 2.0，需要使用支持该引擎的 Morphe（离线验证使用官方 Morphe Desktop 1.19.0）。仓库不包含第三方 X 安装包。
+云端使用 `UPSTREAM.json` 固定的源码及构建脚本，并应用 `source-patches/`。工作流验证中文资源和占位符，运行分页与时间线测试、NewX resolver 检查和完整构建，生成补丁包、构建信息及 SHA-256 校验值。本版以 12.39.0 生产版为目标；旧目标使用已保留的旧发布。补丁引擎升级为 Morphe Patcher 2.0，需要使用支持该引擎的 Morphe（离线验证使用官方 Morphe Desktop 1.19.0）。仓库不包含第三方 X 安装包。
 
+- X.26.18 单独发布，升级前 main 为 `backup/before-X.26.18`（`89cf1f94d25c6a8e63373ca36f31d9b0fad44a72`），旧版与全部资产保留。
 - X.26.17 单独发布，更新前 main 为 `backup/before-X.26.17`（`d641fe306947fe942d0b6a6776a340ca5ea5f991`）；X.26.16 及此前标签和发布产物保留。
 - X.26.16 单独发布，回退基线为 `backup/before-X.26.16`（`aa58d7d4b946a3a1010e8fc72a1cd55e877d5c88`）；X.26.15 及此前资产保留。
 - X.26.15 单独发布，更新前 main 保存在 `backup/before-X.26.15`（`f29c16237275e2a01debffd322ef0be5f442d2e1`），X.26.11 的标签与发布产物保留。
