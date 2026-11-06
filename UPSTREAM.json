@@ -2,10 +2,10 @@
   "builder_repository": "crimera/piko-newx",
   "builder_commit": "951d6144f0595bb576cafed8e1a651ba646dfdc7",
   "source_repository": "crimera/piko",
-  "source_commit": "340dd024aa889a5e116550039eafceeb45a85107",
+  "source_commit": "3a68f2cafac6da895939fe003683377f14466b9c",
   "source_branch": "x-lite",
-  "upstream_version": "3.73.0",
-  "app_version": "12.39.0-prod.01",
-  "released_source_commit": "340dd024aa889a5e116550039eafceeb45a85107",
-  "source_revision_description": "Released v3.73.0 source; older X targets remain on X.26.17"
+  "upstream_version": "3.74.0",
+  "app_version": "12.40.1-prod.01",
+  "released_source_commit": "3a68f2cafac6da895939fe003683377f14466b9c",
+  "source_revision_description": "Released v3.74.0 source with X 12.40.1 production support"
 }

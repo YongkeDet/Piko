@@ -1860,7 +1860,7 @@
          }
 --- a/patches/src/main/kotlin/app/crimera/patches/newx/utils/Constants.kt
 +++ b/patches/src/main/kotlin/app/crimera/patches/newx/utils/Constants.kt
-@@ -5,6 +5,18 @@
+@@ -5,6 +5,19 @@
  import app.morphe.patcher.patch.Compatibility
  
  internal object Constants {
@@ -1873,6 +1873,7 @@
 +            appIconColor = 0x000000,
 +            targets = listOf(
 +                AppTarget(version = "12.39.0-prod.01"),
++                AppTarget(version = "12.40.1-prod.01"),
 +            ),
 +        )
 +
